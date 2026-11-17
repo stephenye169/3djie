@@ -20,6 +20,7 @@ export class AssetVisuals {
     this.signs = new Map();
     this.auras = new Map(); // shopId -> { group, expireAt, ringMat, domeMat, countdownSprite, lastCountdownSec }
     this.time = 0;
+    this._tmpVec = new THREE.Vector3();
     this.shopMeshesRef = shopMeshes; // 渐进加载：建筑会陆续填充进同一数组，apply 时懒注册
 
     shopMeshes.forEach((mesh) => this._registerShopMesh(mesh));
@@ -42,10 +43,12 @@ export class AssetVisuals {
 
   /** 每次游戏状态更新时调用 */
   apply(assets, myId) {
-    // 渐进加载：补注册陆续建成的建筑（同一数组引用，遍历增量部分）
+    // 渐进加载：补注册陆续建成的建筑与店铺图标（同一数组引用）
     for (const mesh of this.shopMeshesRef) {
       const sid = mesh.userData?.shopId;
-      if (sid && !this.meshes.has(sid) && !(mesh.userData?.isShopMarker || mesh.isSprite)) {
+      if (!sid) continue;
+      const isMarker = !!(mesh.userData?.isShopMarker || mesh.isSprite);
+      if (isMarker ? !this.markers.has(sid) : !this.meshes.has(sid)) {
         this._registerShopMesh(mesh);
       }
     }
@@ -59,7 +62,10 @@ export class AssetVisuals {
       const level = asset.level || 1;
       // 收购即拔高 15%，每升一级再高 10%，最高 1.5 倍
       const scaleY = asset.ownerId ? Math.min(1.5, 1.15 + 0.1 * (level - 1)) : 1;
-      mesh.scale.y = scaleY;
+      if (mesh.scale.y !== scaleY) {
+        mesh.scale.y = scaleY;
+        mesh.updateMatrix(); // freezeStatic 后 matrixAutoUpdate=false，须显式更新矩阵
+      }
 
       const box = this.bounds.get(asset.id) || { min: 0, max: 6 };
       const top = box.min + (box.max - box.min) * scaleY;
@@ -135,14 +141,13 @@ export class AssetVisuals {
       this.auras.set(shopId, aura);
     }
     // 重新对齐位置（建筑可能移动/缩放）
-    const world = new THREE.Vector3();
-    mesh.getWorldPosition(world);
-    aura.group.position.x = world.x;
-    aura.group.position.z = world.z;
+    mesh.getWorldPosition(this._tmpVec);
+    aura.group.position.x = this._tmpVec.x;
+    aura.group.position.z = this._tmpVec.z;
   }
 
   _buildAura(shopId, mesh) {
-    const world = new THREE.Vector3();
+    const world = this._tmpVec;
     mesh.getWorldPosition(world);
     const box = this.bounds.get(shopId) || { min: 0, max: 6 };
     const halfH = (box.max - box.min) / 2;
@@ -301,10 +306,9 @@ export class AssetVisuals {
     const mesh = this.meshes.get(shopId);
     if (mesh) {
       // 灯牌跟随建筑水平位置，避免建筑旋转时错位
-      const world = new THREE.Vector3();
-      mesh.getWorldPosition(world);
-      sprite.position.x = world.x;
-      sprite.position.z = world.z;
+      mesh.getWorldPosition(this._tmpVec);
+      sprite.position.x = this._tmpVec.x;
+      sprite.position.z = this._tmpVec.z;
     }
     this.scene.add(sprite);
     this.signs.set(shopId, sprite);

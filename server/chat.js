@@ -385,15 +385,26 @@ export function sendToUser(userId, msg) {
 
 /** 返回指定房间的在线玩家快照（房间内推送与 welcome 用；roomId 空则全量） */
 export function buildNearbyList(roomId) {
-  let inRoom = null;
-  if (roomId != null) {
-    inRoom = new Set();
-    const roomSet = rooms.get(roomId);
-    if (roomSet) for (const ws of roomSet) if (ws.userId) inRoom.add(ws.userId);
-  }
   const out = [];
+  if (roomId != null) {
+    const roomSet = rooms.get(roomId);
+    if (!roomSet || !roomSet.size) return out;
+    const seen = new Set();
+    for (const ws of roomSet) {
+      const id = ws.userId;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const p = players.get(id);
+      if (!p) continue;
+      out.push({
+        id, nickname: p.user.nickname, variant: p.user.variant,
+        title: p.user.title,
+        x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +(p.yaw || 0).toFixed(3),
+      });
+    }
+    return out;
+  }
   for (const [id, p] of players.entries()) {
-    if (inRoom && !inRoom.has(id)) continue;
     out.push({
       id, nickname: p.user.nickname, variant: p.user.variant,
       title: p.user.title,

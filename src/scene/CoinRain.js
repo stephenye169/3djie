@@ -12,6 +12,7 @@ import * as THREE from 'three';
 const MAX_COINS = 12;
 const MAX_BOXES = 2;
 const PICK_RADIUS = 2.0;
+const PICK_RADIUS_SQ = PICK_RADIUS * PICK_RADIUS;
 const CLICK_RANGE = 9;
 const COIN_LIFE_MS = 65_000;
 const RAIN_INTERVAL_MS = [42_000, 75_000];
@@ -35,66 +36,72 @@ function getGlowTexture() {
   return glowTexture;
 }
 
-function makeGlow(scale) {
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: getGlowTexture(),
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  }));
-  sprite.scale.set(scale, scale, 1);
-  sprite.renderOrder = 5;
-  return sprite;
+let _sharedCoinAssets = null;
+let _sharedBoxAssets = null;
+
+function getCoinAssets() {
+  if (_sharedCoinAssets) return _sharedCoinAssets;
+  _sharedCoinAssets = {
+    coinGeo: new THREE.CylinderGeometry(0.28, 0.28, 0.07, 24),
+    coinMat: new THREE.MeshStandardMaterial({
+      color: 0xffd24a, emissive: 0xff9d00, emissiveIntensity: 0.85, metalness: 0.9, roughness: 0.22,
+    }),
+    rimGeo: new THREE.TorusGeometry(0.29, 0.025, 8, 28),
+    rimMat: new THREE.MeshBasicMaterial({ color: 0xfff3b0 }),
+    glowMat: new THREE.SpriteMaterial({
+      map: getGlowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }),
+  };
+  return _sharedCoinAssets;
+}
+
+function getBoxAssets() {
+  if (_sharedBoxAssets) return _sharedBoxAssets;
+  _sharedBoxAssets = {
+    boxGeo: new THREE.BoxGeometry(0.78, 0.62, 0.78),
+    boxMat: new THREE.MeshStandardMaterial({
+      color: 0xffc125, emissive: 0xff8a00, emissiveIntensity: 0.55, metalness: 0.95, roughness: 0.2,
+    }),
+    bandGeo: new THREE.BoxGeometry(0.84, 0.1, 0.84),
+    bandMat: new THREE.MeshBasicMaterial({ color: 0xfff6c8 }),
+    glowMat: new THREE.SpriteMaterial({
+      map: getGlowTexture(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }),
+  };
+  return _sharedBoxAssets;
 }
 
 function makeCoinMesh() {
+  const a = getCoinAssets();
   const group = new THREE.Group();
-
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffd24a,
-    emissive: 0xff9d00,
-    emissiveIntensity: 0.85,
-    metalness: 0.9,
-    roughness: 0.22,
-  });
-  const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.07, 24), material);
-  coin.rotation.x = Math.PI / 2; // 立起来，旋转时像一枚翻飞的金币
+  const coin = new THREE.Mesh(a.coinGeo, a.coinMat);
+  coin.rotation.x = Math.PI / 2;
   coin.castShadow = true;
   group.add(coin);
+  group.add(new THREE.Mesh(a.rimGeo, a.rimMat));
 
-  const rim = new THREE.Mesh(
-    new THREE.TorusGeometry(0.29, 0.025, 8, 28),
-    new THREE.MeshBasicMaterial({ color: 0xfff3b0 })
-  );
-  group.add(rim);
-
-  group.add(makeGlow(2.1));
+  const glow = new THREE.Sprite(a.glowMat);
+  glow.scale.set(2.1, 2.1, 1);
+  glow.renderOrder = 5;
+  group.add(glow);
   return group;
 }
 
 function makeBoxMesh() {
+  const a = getBoxAssets();
   const group = new THREE.Group();
-
-  const gold = new THREE.MeshStandardMaterial({
-    color: 0xffc125,
-    emissive: 0xff8a00,
-    emissiveIntensity: 0.55,
-    metalness: 0.95,
-    roughness: 0.2,
-  });
-  const box = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.62, 0.78), gold);
+  const box = new THREE.Mesh(a.boxGeo, a.boxMat);
   box.castShadow = true;
   group.add(box);
-
-  const bandMat = new THREE.MeshBasicMaterial({ color: 0xfff6c8 });
-  const bandGeo = new THREE.BoxGeometry(0.84, 0.1, 0.84);
   for (const y of [-0.2, 0.2]) {
-    const band = new THREE.Mesh(bandGeo, bandMat);
+    const band = new THREE.Mesh(a.bandGeo, a.bandMat);
     band.position.y = y;
     group.add(band);
   }
-
-  group.add(makeGlow(3.4));
+  const glow = new THREE.Sprite(a.glowMat);
+  glow.scale.set(3.4, 3.4, 1);
+  glow.renderOrder = 5;
+  group.add(glow);
   return group;
 }
 
@@ -260,14 +267,6 @@ export class CoinRain {
 
   _remove(entry) {
     this.scene.remove(entry.mesh);
-    entry.mesh.traverse((child) => {
-      if (child.isMesh) {
-        child.geometry.dispose();
-        child.material.dispose();
-      } else if (child.isSprite) {
-        child.material.dispose();
-      }
-    });
     const index = this.entries.indexOf(entry);
     if (index >= 0) this.entries.splice(index, 1);
   }
@@ -343,8 +342,9 @@ export class CoinRain {
     }
 
     const now = performance.now();
-    for (const entry of [...this.entries]) {
-      if (entry.claimed) continue;
+    for (let i = this.entries.length - 1; i >= 0; i -= 1) {
+      const entry = this.entries[i];
+      if (!entry || entry.claimed) continue;
 
       const mesh = entry.mesh;
       if (entry.falling) {
@@ -369,11 +369,11 @@ export class CoinRain {
       }
 
       if (!active || entry.falling) continue;
-      if (now - entry.bornAt < 350) continue; // 出生缓冲，让金币先露个脸
+      if (now - entry.bornAt < 350) continue;
       if (entry.retryAt && now < entry.retryAt) continue;
       const dx = mesh.position.x - this.player.position.x;
       const dz = mesh.position.z - this.player.position.z;
-      if (Math.hypot(dx, dz) <= PICK_RADIUS) this._collect(entry);
+      if (dx * dx + dz * dz <= PICK_RADIUS_SQ) this._collect(entry);
     }
   }
 

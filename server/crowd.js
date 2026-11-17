@@ -13,7 +13,7 @@
  * 所有结算由服务端执行；每 60s 一次结算检查（到期判定 + 分红池累积）。
  */
 import express from 'express';
-import { query, run } from './db.js';
+import { query, run, deductBalance } from './db.js';
 import { authMiddleware } from './auth.js';
 import { settle, syncDerived, assetValue } from './economy.js';
 import { broadcastBattle } from './chat.js';
@@ -71,11 +71,11 @@ export function invest(projectId, user, amount) {
 
   settle(user.id);
   const row = query('SELECT balance FROM users WHERE id = ?', [user.id])[0];
-  if (Number(row.balance) < asking) {
-    throw new CrowdError(402, `资金不足，入股 ${formatMoney(asking)}，你还差 ${formatMoney(asking - row.balance)}`);
+  if (!row) throw new CrowdError(404, '用户不存在');
+  if (!deductBalance(user.id, asking)) {
+    const curBal = Number(row.balance || 0);
+    throw new CrowdError(402, `资金不足，入股 ${formatMoney(asking)}，你还差 ${formatMoney(Math.max(0, asking - curBal))}`);
   }
-
-  run('UPDATE users SET balance = balance - ? WHERE id = ?', [asking, user.id]);
   run('UPDATE crowd_projects SET raised = raised + ? WHERE id = ?', [asking, projectId]);
   run(
     `INSERT INTO crowd_shares (project_id, user_id, amount, claimed_pool, invested_at)

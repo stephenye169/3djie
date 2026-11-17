@@ -35,12 +35,83 @@ function ensureDirs() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-/** 把内存中的 sql.js db 写回磁盘（sql.js 必须手动 save） */
-function saveDb() {
+let _saveTimer = null;
+let _dirty = false;
+let _writing = false;
+let _hooksRegistered = false;
+
+/** 立即同步落盘（初始化 / 进程退出时使用，写临时文件后原子替换） */
+export function flushDbSync() {
+  if (_saveTimer) {
+    clearTimeout(_saveTimer);
+    _saveTimer = null;
+  }
   if (!_db || !_SQL) return;
+  _dirty = false;
   ensureDirs();
-  const data = _db.export();
-  fs.writeFileSync(DB_PATH, Buffer.from(data));
+  const buf = Buffer.from(_db.export());
+  const tmpPath = `${DB_PATH}.tmp`;
+  fs.writeFileSync(tmpPath, buf);
+  try {
+    fs.renameSync(tmpPath, DB_PATH);
+  } catch {
+    // Windows 目标文件被杀毒/编辑器短暂占用时兜底直写
+    fs.writeFileSync(DB_PATH, buf);
+    try { fs.unlinkSync(tmpPath); } catch { /* 忽略 */ }
+  }
+}
+
+async function _flushAsync() {
+  if (!_db || !_SQL) return;
+  if (_writing) {
+    _dirty = true;
+    return;
+  }
+  _writing = true;
+  _dirty = false;
+  try {
+    ensureDirs();
+    const buf = Buffer.from(_db.export());
+    const tmpPath = `${DB_PATH}.tmp`;
+    await fs.promises.writeFile(tmpPath, buf);
+    try {
+      await fs.promises.rename(tmpPath, DB_PATH);
+    } catch {
+      await fs.promises.writeFile(DB_PATH, buf);
+      try { await fs.promises.unlink(tmpPath); } catch { /* 忽略 */ }
+    }
+  } catch (err) {
+    console.warn('[db] 异步落盘失败:', err.message);
+    _dirty = true;
+  } finally {
+    _writing = false;
+    if (_dirty) scheduleSave();
+  }
+}
+
+/** 节流异步落盘：避免每次 run() 同步全库 export + writeFileSync 阻塞事件循环 */
+function scheduleSave() {
+  if (!_db || !_SQL) return;
+  _dirty = true;
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    _flushAsync();
+  }, 400);
+}
+
+function registerShutdownHooks() {
+  if (_hooksRegistered) return;
+  _hooksRegistered = true;
+  const onSignal = () => {
+    try { flushDbSync(); } catch { /* 忽略 */ }
+    process.exit(0);
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  process.once('beforeExit', () => {
+    try { flushDbSync(); } catch { /* 忽略 */ }
+  });
 }
 
 // ============ 启动初始化 ============
@@ -232,17 +303,24 @@ async function _init() {
       expires_at INTEGER NOT NULL,
       used_at    INTEGER
     );
+    CREATE INDEX IF NOT EXISTS idx_orders_user_prod_ts ON orders(user_id, product_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id, blocked_id);
+    CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id, blocker_id);
+    CREATE INDEX IF NOT EXISTS idx_tx_user_ts ON transaction_logs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_battle_ts ON battle_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_crowd_shares_user ON crowd_shares(user_id);
+    CREATE INDEX IF NOT EXISTS idx_coupons_user ON coupons(user_id, used_at, expires_at);
   `);
 
-  saveDb();
+  registerShutdownHooks();
   _migrateV1();   // 老库补 chat_banned 字段（幂等，跑过一次后再跑也是 no-op）
   _grantStartupCapital(); // 必须在 _migrateV2 之前：靠 last_tick 列是否存在判断是否首发
   _migrateV2();   // 老库补游戏数值字段（幂等）
   _migrateV3();   // 老库补金币拾取 / 家族分红时间戳（幂等）
-  saveDb();
   _seedShops();
   await _seedAdmin();
   _seedAnnouncements();
+  flushDbSync();
   return db;
 }
 
@@ -267,7 +345,7 @@ export function run(sql, params = []) {
   stmt.bind(params);
   while (stmt.step()) { /* 消费结果 */ }
   stmt.free();
-  saveDb();
+  scheduleSave();
 }
 
 /** 查询，返回对象数组 */
@@ -324,6 +402,26 @@ export function addBalance(userId, delta) {
   run('UPDATE users SET balance = balance + ? WHERE id = ?', [delta, userId]);
   const rows = query('SELECT balance FROM users WHERE id = ?', [userId]);
   return rows[0]?.balance ?? null;
+}
+
+/**
+ * 原子扣减余额：WHERE 条件校验 balance >= amount，防止并发请求把余额扣成负数。
+ * @returns {boolean} 是否扣款成功
+ */
+export function deductBalance(userId, amount) {
+  if (USE_MYSQL) {
+    throw new Error('USE_MYSQL=true 但 MySQL deductBalance() 未实现');
+  }
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n < 0) return false;
+  if (n === 0) return true;
+  const stmt = _db.prepare('UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?');
+  stmt.bind([n, userId, n]);
+  while (stmt.step()) { /* 消费结果 */ }
+  stmt.free();
+  const ok = _db.getRowsModified() > 0;
+  if (ok) scheduleSave();
+  return ok;
 }
 
 // ============ 黑名单（拉黑） ============
@@ -406,25 +504,56 @@ export function deleteAnnouncement(id) {
 
 // ============ 聊天消息 JSONL 落盘（与数据库解耦，MySQL 模式下继续用） ============
 
-export function appendMessage(entry) {
-  ensureDirs();
-  fs.appendFileSync(MESSAGES_PATH, JSON.stringify(entry) + '\n', 'utf8');
+const DM_CACHE_MAX_PER_PAIR = 500;
+let _dmCache = null; // Map<pairKey, Array<{ from, to, text, ts }>>
+let _msgWriteChain = Promise.resolve();
+
+function _dmPairKey(a, b) {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
 }
 
-/** 两人之间的私聊记录（只返回涉及这两位用户的 dm） */
-export function messagesBetween(userA, userB, limit = 200) {
-  if (!fs.existsSync(MESSAGES_PATH)) return [];
-  const lines = fs.readFileSync(MESSAGES_PATH, 'utf8').split('\n').filter(Boolean);
-  const out = [];
+function _pushDmCache(entry) {
+  if (!_dmCache || entry?.scope !== 'dm' || !entry?.from?.id || !entry?.to) return;
+  const key = _dmPairKey(entry.from.id, entry.to);
+  let list = _dmCache.get(key);
+  if (!list) {
+    list = [];
+    _dmCache.set(key, list);
+  }
+  list.push({ from: entry.from, to: entry.to, text: entry.text, ts: entry.ts });
+  if (list.length > DM_CACHE_MAX_PER_PAIR) list.shift();
+}
+
+function _ensureDmCache() {
+  if (_dmCache) return _dmCache;
+  _dmCache = new Map();
+  if (!fs.existsSync(MESSAGES_PATH)) return _dmCache;
+  const lines = fs.readFileSync(MESSAGES_PATH, 'utf8').split('\n');
   for (const line of lines) {
+    if (!line) continue;
     let m;
     try { m = JSON.parse(line); } catch { continue; }
-    if (m.scope !== 'dm' || !m.from) continue;
-    const from = m.from.id;
-    const isPair = (from === userA && m.to === userB) || (from === userB && m.to === userA);
-    if (isPair) out.push({ from: m.from, to: m.to, text: m.text, ts: m.ts });
+    _pushDmCache(m);
   }
-  return out.slice(-limit);
+  return _dmCache;
+}
+
+export function appendMessage(entry) {
+  _pushDmCache(entry);
+  _msgWriteChain = _msgWriteChain
+    .then(() => {
+      ensureDirs();
+      return fs.promises.appendFile(MESSAGES_PATH, JSON.stringify(entry) + '\n', 'utf8');
+    })
+    .catch((err) => console.warn('[db] 私聊消息写入失败:', err.message));
+}
+
+/** 两人之间的私聊记录（懒加载内存缓存，避免每次拉历史阻塞读取整份 JSONL） */
+export function messagesBetween(userA, userB, limit = 200) {
+  const cache = _ensureDmCache();
+  const list = cache.get(_dmPairKey(userA, userB));
+  if (!list || !list.length) return [];
+  return list.slice(-limit);
 }
 
 // ============ shops 种子数据 ============

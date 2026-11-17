@@ -99,7 +99,8 @@ export function createScene(container) {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  /** 昼夜光照：按 dayT ∈ [0,1) 在关键帧之间插值（颜色 lerp + 强度 lerp + 天空重绘） */
+  let lastSkyKey = '';
+  /** 昼夜光照：按 dayT ∈ [0,1) 在关键帧之间插值（颜色未变化时跳过天空纹理重绘） */
   function applyDaylight(dayT) {
     const t = ((dayT % 1) + 1) % 1;
     let a = DAY_KEYS[0];
@@ -122,14 +123,17 @@ export function createScene(container) {
     scene.fog.color.lerpColors(_cA.setHex(a.fog), _cB.setHex(b.fog), k);
     scene.fog.density = a.fogD + (b.fogD - a.fogD) * k;
 
-    // 天空渐变重绘（16×256 极小，逐帧重绘无压力）
-    const ctx = skyCanvas.getContext('2d');
     _cA.set(a.skyTop).lerp(_cB.set(b.skyTop), k);
     const top = `#${_cA.getHexString()}`;
     _cA.set(a.skyMid).lerp(_cB.set(b.skyMid), k);
     const mid = `#${_cA.getHexString()}`;
     _cA.set(a.skyHor).lerp(_cB.set(b.skyHor), k);
     const hor = `#${_cA.getHexString()}`;
+    const skyKey = `${top}|${mid}|${hor}`;
+    if (skyKey === lastSkyKey) return;
+    lastSkyKey = skyKey;
+
+    const ctx = skyCanvas.getContext('2d');
     const gradient = ctx.createLinearGradient(0, 0, 0, 256);
     gradient.addColorStop(0, top);
     gradient.addColorStop(0.55, mid);

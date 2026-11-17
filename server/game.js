@@ -12,7 +12,7 @@
  *   POST /api/game/worship          膜拜全服首富领红包（每人每小时一次）
  */
 import express from 'express';
-import { query, run, randomId, addBalance } from './db.js';
+import { query, run, randomId, addBalance, deductBalance } from './db.js';
 import { authMiddleware } from './auth.js';
 import { broadcastBattle } from './chat.js';
 import { listOwned, settle, syncDerived } from './economy.js';
@@ -245,16 +245,15 @@ router.post('/acquire', authMiddleware, (req, res) => {
   const price = Math.round(asset.price * dominationFactor(
     talentLevelOf(JSON.parse(row.talents_json || '{}'), 'capitalDomination')
   ));
-  if (Number(row.balance) < price) {
+  if (!deductBalance(req.user.id, price)) {
+    const curBal = Number(row.balance || 0);
     return res.status(402).json({
       error: '资金不足',
       need: price,
-      balance: Math.floor(row.balance),
-      short: Math.ceil(price - row.balance),
+      balance: Math.floor(curBal),
+      short: Math.ceil(Math.max(0, price - curBal)),
     });
   }
-
-  run('UPDATE users SET balance = balance - ? WHERE id = ?', [price, req.user.id]);
   run(
     'INSERT INTO player_shops (user_id, shop_id, level, acquired_at) VALUES (?, ?, 1, ?)',
     [req.user.id, assetId, Date.now()]
@@ -292,16 +291,16 @@ router.post('/upgrade', authMiddleware, (req, res) => {
   ));
   settle(req.user.id);
   const row = query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0];
-  if (Number(row.balance) < cost) {
+  if (!row) return res.status(404).json({ error: '用户不存在' });
+  if (!deductBalance(req.user.id, cost)) {
+    const curBal = Number(row.balance || 0);
     return res.status(402).json({
       error: '资金不足',
       need: cost,
-      balance: Math.floor(row.balance),
-      short: Math.ceil(cost - row.balance),
+      balance: Math.floor(curBal),
+      short: Math.ceil(Math.max(0, cost - curBal)),
     });
   }
-
-  run('UPDATE users SET balance = balance - ? WHERE id = ?', [cost, req.user.id]);
   run('UPDATE player_shops SET level = ? WHERE user_id = ? AND shop_id = ?', [level + 1, req.user.id, assetId]);
   syncDerived(req.user.id);
 

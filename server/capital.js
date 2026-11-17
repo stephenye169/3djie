@@ -8,7 +8,7 @@
  * - 护盘失败/认栽/超时：店铺易主，攻击方出价不予退还
  * - 同一店铺同时只允许一场踢馆；结算后该店铺进入 5 分钟冷却
  */
-import { query, run, randomId } from './db.js';
+import { query, run, randomId, deductBalance } from './db.js';
 import { settle, syncDerived, assetValue } from './economy.js';
 import { findAsset, assetValueOf, formatMoney } from '../shared/assets.js';
 import { sendToUser, broadcastBattle } from './chat.js';
@@ -215,11 +215,11 @@ export function createAttack(attacker, assetId) {
 
   settle(attacker.id);
   const row = query('SELECT balance, nickname FROM users WHERE id = ?', [attacker.id])[0];
-  if (Number(row.balance) < bid) {
-    throw new CapitalError(402, `资金不足，踢馆需要 ${formatMoney(bid)}，你还差 ${formatMoney(bid - row.balance)}`);
+  if (!row) throw new CapitalError(404, '用户不存在');
+  if (!deductBalance(attacker.id, bid)) {
+    const curBal = Number(row.balance || 0);
+    throw new CapitalError(402, `资金不足，踢馆需要 ${formatMoney(bid)}，你还差 ${formatMoney(Math.max(0, bid - curBal))}`);
   }
-
-  run('UPDATE users SET balance = balance - ? WHERE id = ?', [bid, attacker.id]);
 
   const now = Date.now();
   const attack = {
@@ -265,14 +265,14 @@ export function defend(attackId, user) {
 
   settle(user.id);
   const row = query('SELECT balance FROM users WHERE id = ?', [user.id])[0];
-  if (Number(row.balance) < attack.defendCost) {
+  if (!row) throw new CapitalError(404, '用户不存在');
+  if (!deductBalance(user.id, attack.defendCost)) {
+    const curBal = Number(row.balance || 0);
     throw new CapitalError(
       402,
-      `护盘需要 ${formatMoney(attack.defendCost)}，你还差 ${formatMoney(attack.defendCost - row.balance)}`
+      `护盘需要 ${formatMoney(attack.defendCost)}，你还差 ${formatMoney(Math.max(0, attack.defendCost - curBal))}`
     );
   }
-
-  run('UPDATE users SET balance = balance - ? WHERE id = ?', [attack.defendCost, user.id]);
   // 攻击方的托管资金作为赔偿转给原店主
   run('UPDATE users SET balance = balance + ? WHERE id = ?', [attack.bid, user.id]);
 
@@ -400,13 +400,11 @@ export function counterReply(attackId, userId, accept) {
   // 同意：攻击者补齐差价（托管金 bid 之外的部分）
   settle(attack.attackerId);
   const row = query('SELECT balance FROM users WHERE id = ?', [userId])[0];
+  if (!row) throw new CapitalError(404, '用户不存在');
   const extra = price - attack.bid;
-  if (Number(row.balance) < extra) {
-    throw new CapitalError(402, `接受还价需要补差 ${formatMoney(extra)}，你还差 ${formatMoney(extra - row.balance)}——可拒绝还价继续对抗`);
-  }
-
-  if (extra > 0) {
-    run('UPDATE users SET balance = balance - ? WHERE id = ?', [extra, userId]);
+  if (extra > 0 && !deductBalance(userId, extra)) {
+    const curBal = Number(row.balance || 0);
+    throw new CapitalError(402, `接受还价需要补差 ${formatMoney(extra)}，你还差 ${formatMoney(Math.max(0, extra - curBal))}——可拒绝还价继续对抗`);
   }
   attack.counter = null;
 

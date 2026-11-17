@@ -41,7 +41,10 @@ export class Danmaku {
     this.layer.appendChild(item);
     this.count += 1;
 
+    let removed = false;
     const remove = () => {
+      if (removed) return;
+      removed = true;
       if (item.parentNode) item.remove();
       this.count = Math.max(0, this.count - 1);
     };

@@ -637,7 +637,6 @@ function start(world, user, scene, camera, renderer) {
   // 地图标注需要全部建筑包围盒：渐进加载完成后（几何合并收尾）重建；非渐进模式立即建
   if (world.progressive) {
     world.progressive.done.then(() => {
-      world.finalizeMerge?.(); // 兜底（ProceduralStreet 内部已在 done 链上合并）
       mapView.setData(world.shopMeshes, entrances);
     });
   } else {
@@ -647,10 +646,11 @@ function start(world, user, scene, camera, renderer) {
   // ---- LOD 距离分片（README §20 性能项）：相机 30m 内显示细构件，更远只留体块 ----
   const LOD_DETAIL_M = 30;
   const _lodVec = new THREE.Vector3();
-  setInterval(() => {
+  let lodTimer = setInterval(() => {
     const camPos = camera.position;
     for (const mesh of world.lodMeshes) {
-      mesh.visible = mesh.getWorldPosition(_lodVec).distanceTo(camPos) <= LOD_DETAIL_M;
+      const center = mesh.userData?.lodCenter || mesh.getWorldPosition(_lodVec);
+      mesh.visible = center.distanceTo(camPos) <= LOD_DETAIL_M;
     }
   }, 250);
 
@@ -1077,7 +1077,7 @@ function start(world, user, scene, camera, renderer) {
     document.getElementById('profile-nick').textContent = fallbackNick || '加载中…';
     document.getElementById('profile-shops').innerHTML = '<div class="crowd-empty">加载中…</div>';
 
-    const res = await gameStore.playerProfile ? await api.playerProfile(userId).catch(() => null) : null;
+    const res = await api.playerProfile(userId).catch(() => null);
     if (!res || res.error) {
       panel.classList.add('hidden');
       showToast(res?.error || '资料加载失败');
@@ -1272,12 +1272,21 @@ function start(world, user, scene, camera, renderer) {
     return sprite;
   }
 
-  function applyRemoteBubble(entry, mode = 'full') {
+  function applyRemoteBubble(entry, mode = entry.labelMode || 'full', force = false) {
     // 移除 Player 类默认画的单行 nameTag（它在玩家头顶 height/2 + 0.42 ≈ 1.32）
     const oldNameTag = entry.player.mesh.children.find(
       (c) => c.isSprite && !c.userData?.remoteBubble && c !== entry.player.chatBubble
     );
     if (oldNameTag) entry.player.mesh.remove(oldNameTag);
+    if (mode === 'hidden') {
+      if (entry.bubble) entry.bubble.visible = false;
+      if (force) entry.bubbleDirty = true;
+      return;
+    }
+    if (!force && !entry.bubbleDirty && entry.bubble && entry.renderedMode === mode) {
+      entry.bubble.visible = true;
+      return;
+    }
     if (entry.bubble) {
       entry.player.mesh.remove(entry.bubble);
       entry.bubble.material.map?.dispose();
@@ -1285,7 +1294,9 @@ function start(world, user, scene, camera, renderer) {
     }
     entry.bubble = makeRemoteBubble({ name: entry.name, title: entry.title, mode });
     entry.bubble.userData = { remoteBubble: true };
-    entry.bubble.visible = mode !== 'hidden';
+    entry.bubble.visible = true;
+    entry.renderedMode = mode;
+    entry.bubbleDirty = false;
     entry.player.mesh.add(entry.bubble);
   }
 
@@ -1317,7 +1328,7 @@ function start(world, user, scene, camera, renderer) {
         if (nameChanged || titleChanged) {
           entry.name = p.nickname;
           entry.title = p.title;
-          applyRemoteBubble(entry);
+          applyRemoteBubble(entry, entry.labelMode || 'full', true);
         }
       } else {
         const remote = new Player([], world.groundY, null, { variant: p.variant, name: p.nickname });
@@ -1765,6 +1776,7 @@ function start(world, user, scene, camera, renderer) {
   function confirmExit() {
     if (exited) return;
     exited = true;
+    if (lodTimer) { clearInterval(lodTimer); lodTimer = null; }
     exitModal.classList.add('hidden');
     exitScreen.classList.remove('hidden');
     crosshair.classList.remove('show');
@@ -1786,7 +1798,10 @@ function start(world, user, scene, camera, renderer) {
   });
 
   // 主循环
+  // 主循环
   const clock = new THREE.Clock();
+  let lastStateText = '';
+  let lastStateCode = '';
   function animate() {
     if (exited) return; // 已退出：停止循环，不再响应任何输入
     requestAnimationFrame(animate);
@@ -1799,12 +1814,17 @@ function start(world, user, scene, camera, renderer) {
       sceneLighting?.applyDaylight(clock.elapsedTime / DAY_LENGTH_S);
     }
 
-    // 阴影相机跟随玩家（街道长 494m，固定原点会让远处阴影消失）
+    // 阴影相机按 4m 网格吸附跟随玩家（避免每帧移动导致静态建筑阴影滑移，减少矩阵更新）
     const sun = sceneLighting?.sun;
     if (sun) {
-      sun.position.set(player.mesh.position.x + 28, 42, player.mesh.position.z + 18);
-      sun.target.position.copy(player.mesh.position);
-      sun.target.updateMatrixWorld();
+      const sx = Math.round(player.mesh.position.x / 4) * 4;
+      const sz = Math.round(player.mesh.position.z / 4) * 4;
+      if (sun.target.position.x !== sx || sun.target.position.z !== sz) {
+        sun.position.set(sx + 28, 42, sz + 18);
+        sun.target.position.set(sx, player.mesh.position.y, sz);
+        sun.target.updateMatrixWorld();
+        renderer.shadowMap.needsUpdate = true;
+      }
     }
 
     // 呼吸动画：保护期光环穹顶 / 地面光圈 / 倒计时 Sprite
@@ -1902,28 +1922,34 @@ function start(world, user, scene, camera, renderer) {
         ring.update(elapsed);
       }
     }
-
-    // 底部人物状态
+    // 底部人物状态（仅在变化时更新 DOM，避免每帧触发样式重算）
     const moving = input.forward || input.back || input.left || input.right;
+    let nextStateText = '静止';
+    let nextStateCode = 'idle';
     if (mapView.active) {
-      playerStateEl.textContent = '地图总览';
-      playerStateEl.dataset.state = 'view';
+      nextStateText = '地图总览';
+      nextStateCode = 'view';
     } else if (talking) {
-      playerStateEl.textContent = '交谈中';
-      playerStateEl.dataset.state = 'view';
+      nextStateText = '交谈中';
+      nextStateCode = 'view';
     } else if (uiOpen) {
-      playerStateEl.textContent = '查看中';
-      playerStateEl.dataset.state = 'view';
+      nextStateText = '查看中';
+      nextStateCode = 'view';
     } else if (mode === 'interior' && !moving) {
-      playerStateEl.textContent = '店内探索';
-      playerStateEl.dataset.state = 'idle';
+      nextStateText = '店内探索';
+      nextStateCode = 'idle';
     } else if (moving) {
       const running = input.sprint;
-      playerStateEl.textContent = running ? '奔跑中' : '行走中';
-      playerStateEl.dataset.state = running ? 'run' : 'walk';
-    } else {
-      playerStateEl.textContent = '静止';
-      playerStateEl.dataset.state = 'idle';
+      nextStateText = running ? '奔跑中' : '行走中';
+      nextStateCode = running ? 'run' : 'walk';
+    }
+    if (nextStateText !== lastStateText) {
+      lastStateText = nextStateText;
+      playerStateEl.textContent = nextStateText;
+    }
+    if (nextStateCode !== lastStateCode) {
+      lastStateCode = nextStateCode;
+      playerStateEl.dataset.state = nextStateCode;
     }
 
     // 位置同步：街道上每 2s 上报一次（店内是独立坐标系，不上报）

@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { initDb, query, run, randomId, listUsersForAdmin, setChatBanned } from './db.js';
+import { initDb, query, run, randomId, listUsersForAdmin, setChatBanned, deductBalance } from './db.js';
 import authRouter, { authMiddleware, adminMiddleware } from './auth.js';
 import { publicRouter as announcementsRouter, adminRouter as adminAnnouncementsRouter } from './announcements.js';
 import { registerSocket, players, roomStats, ROOM_CAPACITY } from './chat.js';
@@ -133,7 +133,7 @@ app.get('/api/orders/my', authMiddleware, (req, res) => {
 app.post('/api/orders', authMiddleware, (req, res) => {
   const { product_id, qty = 1 } = req.body || {};
   if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
-  const q = Math.max(1, Math.min(99, Number(qty)));
+  const q = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
 
   const prods = query('SELECT shop_id, name, price FROM products WHERE id = ?', [product_id]);
   if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
@@ -156,20 +156,22 @@ app.post('/api/orders', authMiddleware, (req, res) => {
   )[0];
   const discount = coupon ? coupon.discount : 1;
   const total = Math.max(1, Math.round(p.price * q * discount));
-  if (req.user.balance < total) return res.status(402).json({ error: '余额不足' });
 
-  // 事务：先减余额，再插订单；用了券则标记核销
-  run('UPDATE users SET balance = balance - ? WHERE id = ?', [total, req.user.id]);
+  // 原子扣减余额，再插订单；用了券则标记核销
+  if (!deductBalance(req.user.id, total)) {
+    return res.status(402).json({ error: '余额不足' });
+  }
   run(
     'INSERT INTO orders (id, user_id, product_id, qty, paid, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     [randomId(), req.user.id, product_id, q, total, Date.now()]
   );
   if (coupon) run('UPDATE coupons SET used_at = ? WHERE id = ?', [Date.now(), coupon.id]);
 
+  const remaining = Number(query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0]?.balance ?? 0);
   res.json({
     ok: true, product: p, qty: q, total,
     couponUsed: !!coupon, discount: coupon ? Math.round((1 - discount) * 100) : 0,
-    remaining: req.user.balance - total,
+    remaining: Math.max(0, Math.floor(remaining)),
   });
 });
 

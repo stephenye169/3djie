@@ -36,8 +36,12 @@ export class Player {
 
     this._walkPhase = 0; // 走路摆动相位
 
-    // 用于碰撞检测的临时盒子
+    // 用于碰撞检测与移动计算的临时向量/盒子（避免每帧重复 new Vector3）
     this._box = new THREE.Box3();
+    this._half = new THREE.Vector3(this.radius, this.height / 2, this.radius);
+    this._forward = new THREE.Vector3();
+    this._right = new THREE.Vector3();
+    this._moveDir = new THREE.Vector3();
   }
 
   /**
@@ -333,10 +337,10 @@ export class Player {
     dt = Math.min(dt, 0.05); // 防止大跳
 
     // 水平移动方向（相对摄像机）
-    const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
-    const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+    const forward = this._forward.set(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    const right = this._right.set(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
 
-    const moveDir = new THREE.Vector3();
+    const moveDir = this._moveDir.set(0, 0, 0);
     if (input.forward) moveDir.add(forward);
     if (input.back) moveDir.sub(forward);
     if (input.right) moveDir.add(right);
@@ -457,7 +461,7 @@ export class Player {
     this.mesh.position[axis] += delta;
 
     // 用当前位置构造玩家 AABB
-    const half = new THREE.Vector3(this.radius, this.height / 2, this.radius);
+    const half = this._half.set(this.radius, this.height / 2, this.radius);
     this._box.min.copy(this.mesh.position).sub(half);
     this._box.max.copy(this.mesh.position).add(half);
 

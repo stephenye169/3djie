@@ -90,7 +90,10 @@ export function buildProceduralStreet(scene, opts = {}) {
   _buildLanternPosts(root, materials);
 
   /** 渐进完成后的收尾：几何合并 + 静态矩阵冻结（draw call 大幅下降） */
+  let mergedDone = false;
   const finalizeMerge = () => {
+    if (mergedDone) return occluderProxies;
+    mergedDone = true;
     const proxies = mergeStreetGeometries(root, lodMeshes);
     freezeStatic(root);
     occluderProxies.push(...proxies);
@@ -119,10 +122,10 @@ export function buildProceduralStreet(scene, opts = {}) {
 /**
  * 几何体合并（Draw Call 优化）：
  * 按「归属（shopId / common）× 材质 × LOD 档」分桶，桶内构件合成单个 Mesh。
- * - shop 建筑按栋独立合并（合并 mesh 继承 userData.shopId，射线拾取仍能定位到栋）
+ * - shop 建筑按栋独立合并，并挂回各自的 shopGroup 局部空间（保持拔高缩放与包围盒有效）
  * - 公共构件（路面/河/牌坊/灯杆/民居）合并进 common 桶
- * - detail（门窗/店招/灯笼）单独成桶，保留 LOD 远距离整体隐藏
- * - 烘焙世界坐标后统一 toNonIndexed，避免 attributes/index 不一致导致合并失败
+ * - detail（门窗/店招/灯笼）单独成桶并记录世界坐标 lodCenter，保留 LOD 远距离整体隐藏
+ * - 烘焙坐标后统一 toNonIndexed，避免 attributes/index 不一致导致合并失败
  */
 function mergeStreetGeometries(root, lodMeshes) {
   lodMeshes.length = 0; // 旧的单构件 detail mesh 即将被移除，清空避免 LOD 定时器遍历死引用
@@ -131,50 +134,93 @@ function mergeStreetGeometries(root, lodMeshes) {
 
   const buckets = new Map();
   const doomed = [];
-  const occluderProxies = []; // 遮挡剔除射线用的隐形包围盒代理（12 三角/栋，代替打几千三角的合并 mesh）
+  const occluderProxies = []; // 遮挡剔除射线用的隐形包围盒代理（每栋 shop 1 个，代替打几千三角的合并 mesh）
+  const shopBoxes = new Map();
+  const ownerInvCache = new Map();
+  const relMatrix = new THREE.Matrix4();
+  const worldBox = new THREE.Box3();
+
+  const findOwnerGroup = (obj, shopId) => {
+    if (!shopId) return root;
+    let cur = obj.parent;
+    while (cur && cur !== root) {
+      if (cur.isGroup && cur.userData?.shopId === shopId) return cur;
+      cur = cur.parent;
+    }
+    return root;
+  };
 
   root.traverse((obj) => {
     if (!obj.isMesh) return;
     const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
     if (!mat) return;
+    const shopId = obj.userData?.shopId ?? null;
+    const ownerGroup = findOwnerGroup(obj, shopId);
     const lod = obj.userData?.lod === 'detail' ? 'detail' : 'core';
-    const key = `${obj.userData?.shopId ?? 'common'}|${mat.uuid}|${lod}`;
+    const key = `${shopId ?? 'common'}|${mat.uuid}|${lod}`;
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { material: mat, shopId: obj.userData?.shopId ?? null, detail: lod === 'detail', geos: [], sample: obj };
+      bucket = { material: mat, shopId, ownerGroup, detail: lod === 'detail', geos: [], sample: obj };
       buckets.set(key, bucket);
     }
+
     const geo = obj.geometry.index ? obj.geometry.toNonIndexed() : obj.geometry.clone();
-    geo.applyMatrix4(obj.matrixWorld);
+    if (ownerGroup === root) {
+      geo.applyMatrix4(obj.matrixWorld);
+    } else {
+      let inv = ownerInvCache.get(ownerGroup);
+      if (!inv) {
+        inv = new THREE.Matrix4().copy(ownerGroup.matrixWorld).invert();
+        ownerInvCache.set(ownerGroup, inv);
+      }
+      relMatrix.multiplyMatrices(inv, obj.matrixWorld);
+      geo.applyMatrix4(relMatrix);
+    }
     bucket.geos.push(geo);
     doomed.push(obj);
   });
 
   for (const bucket of buckets.values()) {
     const merged = mergeGeometries(bucket.geos, false);
+    for (const g of bucket.geos) g.dispose();
     if (!merged) continue;
+
+    merged.computeBoundingBox();
+    const ownerGroup = bucket.ownerGroup;
+
     const mesh = new THREE.Mesh(merged, bucket.material);
     mesh.castShadow = bucket.sample.castShadow;
     mesh.receiveShadow = bucket.sample.receiveShadow;
     if (bucket.shopId) mesh.userData.shopId = bucket.shopId;
     if (bucket.detail) {
       mesh.userData.lod = 'detail';
+      const lodCenter = new THREE.Vector3();
+      if (merged.boundingBox) {
+        merged.boundingBox.getCenter(lodCenter);
+        if (ownerGroup !== root) lodCenter.applyMatrix4(ownerGroup.matrixWorld);
+      }
+      mesh.userData.lodCenter = lodCenter;
       lodMeshes.push(mesh);
     }
-    root.add(mesh);
+    ownerGroup.add(mesh);
+
+    if (bucket.shopId && merged.boundingBox) {
+      worldBox.copy(merged.boundingBox);
+      if (ownerGroup !== root) worldBox.applyMatrix4(ownerGroup.matrixWorld);
+      let sb = shopBoxes.get(bucket.shopId);
+      if (!sb) {
+        sb = new THREE.Box3();
+        shopBoxes.set(bucket.shopId, sb);
+      }
+      sb.union(worldBox);
+    }
   }
 
   // 为每栋 shop 建筑建一个隐形包围盒代理（仅参与遮挡剔除射线，visible=false 不渲染）
   const proxyMat = new THREE.MeshBasicMaterial();
-  for (const bucket of buckets.values()) {
-    if (!bucket.shopId) continue; // 公共构件（路面/民居）不参与遮挡判定
-    const box = new THREE.Box3();
-    for (const g of bucket.geos) {
-      g.computeBoundingBox();
-      box.union(g.boundingBox);
-    }
-    const size = new THREE.Vector3();
-    const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  for (const [shopId, box] of shopBoxes) {
     box.getSize(size);
     box.getCenter(center);
     if (size.x <= 0 || size.y <= 0 || size.z <= 0) continue;
@@ -182,7 +228,7 @@ function mergeStreetGeometries(root, lodMeshes) {
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), proxyMat);
     proxy.visible = false; // 不渲染，仅被遮挡剔除射线命中
     proxy.position.copy(center);
-    proxy.userData.shopId = bucket.shopId;
+    proxy.userData.shopId = shopId;
     root.add(proxy);
     occluderProxies.push(proxy);
   }
@@ -489,9 +535,8 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
     group.add(sign);
   }
 
-  // 门口灯笼
-  const lanternMat = new THREE.MeshStandardMaterial({
-    color: 0xc0392b,
+  // 门口灯笼（复用缓存材质，合并进同一批次）
+  const lanternMat = _material(cache, 'lantern', 0xc0392b, {
     emissive: 0x8c1d18,
     emissiveIntensity: 0.55,
     roughness: 0.7
