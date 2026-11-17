@@ -12,14 +12,14 @@ import { STREET, LANES, BUILDINGS, PAIFANG, WEST_GATE } from '../data/layout.js'
  */
 /** LOD：细构件的显示距离（相机 30m 内显示门窗/店招/灯笼，更远只留体块） */
 const LOD_DETAIL_M = 30;
-/** 渐进加载：首屏同步构建的范围（出生点 ±30m），其余用空闲时间分批 */
-const PROGRESSIVE_NEAR_M = 30;
-const PROGRESSIVE_BATCH = 3;
+/** 渐进加载：覆盖整条 500m 街道范围，进街前即全部构建合并完毕，避免进入后建筑刷新/弹出 */
+const PROGRESSIVE_NEAR_M = 600;
+const PROGRESSIVE_BATCH = 8;
 
 /**
  * @param {THREE.Scene} scene
  * @param {{spawnZ?: number, progressive?: boolean, onModelRequest?: (req: {building: object, group: THREE.Group, collider: THREE.Box3, url: string}) => void}} [opts]
- *   progressive 默认开启：首屏只同步建 30m 内建筑，其余 requestIdleCallback 分批补齐；
+ *   progressive 默认开启：首屏只同步建 600m 内建筑，其余 requestIdleCallback 分批补齐；
  *   返回值里的 progressive.done 在全部建筑建成时 resolve（用于刷新地图标注等下游）。
  *   onModelRequest：layout.js 里带 model 的建筑会把「程序化占位 + 模型地址」交出去，
  *   由 WorldLoader 后台加载 GLB 后就地替换；加载失败/未提供回调时程序化建筑原样保留（回退）。
@@ -121,9 +121,9 @@ export function buildProceduralStreet(scene, opts = {}) {
 
 /**
  * 几何体合并（Draw Call 优化）：
- * 按「归属（shopId / common）× 材质 × LOD 档」分桶，桶内构件合成单个 Mesh。
+ * 按「归属（shopId / common / 50m 分段 detail）× 材质 × LOD 档」分桶，桶内构件合成单个 Mesh。
  * - shop 建筑按栋独立合并，并挂回各自的 shopGroup 局部空间（保持拔高缩放与包围盒有效）
- * - 公共构件（路面/河/牌坊/灯杆/民居）合并进 common 桶
+ * - 公共构件（路面/河/牌坊/灯杆/民居）合并进 common 桶；民居 detail 按 50m 分段，避免整街一起闪现
  * - detail（门窗/店招/灯笼）单独成桶并记录世界坐标 lodCenter，保留 LOD 远距离整体隐藏
  * - 烘焙坐标后统一 toNonIndexed，避免 attributes/index 不一致导致合并失败
  */
@@ -157,12 +157,15 @@ function mergeStreetGeometries(root, lodMeshes) {
     const shopId = obj.userData?.shopId ?? null;
     const ownerGroup = findOwnerGroup(obj, shopId);
     const lod = obj.userData?.lod === 'detail' ? 'detail' : 'core';
-    const key = `${shopId ?? 'common'}|${mat.uuid}|${lod}`;
+    const lodScope = shopId ?? (lod === 'detail' ? `common-z${Math.round(obj.matrixWorld.elements[14] / 50)}` : 'common');
+    const key = `${lodScope}|${mat.uuid}|${lod}`;
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { material: mat, shopId, ownerGroup, detail: lod === 'detail', geos: [], sample: obj };
+      bucket = { material: mat, shopId, ownerGroup, detail: lod === 'detail', geos: [], castShadow: false, receiveShadow: false };
       buckets.set(key, bucket);
     }
+    if (obj.castShadow) bucket.castShadow = true;
+    if (obj.receiveShadow) bucket.receiveShadow = true;
 
     const geo = obj.geometry.index ? obj.geometry.toNonIndexed() : obj.geometry.clone();
     if (ownerGroup === root) {
@@ -189,8 +192,8 @@ function mergeStreetGeometries(root, lodMeshes) {
     const ownerGroup = bucket.ownerGroup;
 
     const mesh = new THREE.Mesh(merged, bucket.material);
-    mesh.castShadow = bucket.sample.castShadow;
-    mesh.receiveShadow = bucket.sample.receiveShadow;
+    mesh.castShadow = bucket.castShadow;
+    mesh.receiveShadow = bucket.receiveShadow;
     if (bucket.shopId) mesh.userData.shopId = bucket.shopId;
     if (bucket.detail) {
       mesh.userData.lod = 'detail';
@@ -269,7 +272,7 @@ function _buildGround(parent, cache) {
 
   // 东入口广场
   const plaza = new THREE.Mesh(new THREE.BoxGeometry(16, 0.06, 8), pavingMat);
-  plaza.position.set(0, 0.032, 10);
+  plaza.position.set(0, 0.036, 10);
   plaza.receiveShadow = true;
   parent.add(plaza);
 
@@ -426,8 +429,8 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
   const plinthH = 0.4;
   const eaveY = plinthH + b.h;
 
-  // 台基
-  const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.4, plinthH, b.w + 0.4), plinthMat);
+  // 台基（沿街方向保留前后余量，沿 Z 收缩 0.02 避免与紧邻建筑共面 Z-fighting）
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.4, plinthH, Math.max(0.5, b.w - 0.02)), plinthMat);
   plinth.position.y = plinthH / 2;
   plinth.receiveShadow = true;
   group.add(plinth);
@@ -440,7 +443,7 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
   group.add(body);
 
   // 檐口
-  const cornice = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.7, 0.28, b.w + 0.5), roofMat);
+  const cornice = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.7, 0.28, Math.max(0.5, b.w - 0.02)), roofMat);
   cornice.position.y = eaveY + 0.02;
   cornice.castShadow = true;
   group.add(cornice);
@@ -466,7 +469,7 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
 
     for (const dir of [1, -1]) {
       const slab = new THREE.Mesh(
-        new THREE.BoxGeometry(slopeLen, 0.16, b.w + 0.8),
+        new THREE.BoxGeometry(slopeLen, 0.16, Math.max(0.5, b.w - 0.02)),
         roofMat
       );
       slab.position.set(segX + (dir * half) / 2, eaveY + rise / 2, 0);
@@ -476,10 +479,10 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
       group.add(slab);
     }
 
-    // 每段屋顶两端的山墙封头（沿街看就是白墙黛瓦的山墙轮廓）
+    // 每段屋顶两端的山墙封头（收进建筑宽度内，避免探入紧邻建筑引发闪烁）
     for (const dir of [1, -1]) {
       const gable = new THREE.Mesh(gableGeo, wallMat);
-      gable.position.set(segX, eaveY, dir * (b.w / 2) - (dir < 0 ? 0.16 : 0));
+      gable.position.set(segX, eaveY, dir > 0 ? b.w / 2 - 0.16 : -b.w / 2);
       gable.castShadow = true;
       group.add(gable);
     }
@@ -529,7 +532,7 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
         transparent: true
       })
     );
-    sign.position.set(frontX + frontSign * 0.06, signY, 0);
+    sign.position.set(frontX + frontSign * 0.11, signY, 0);
     sign.rotation.y = -sideSign * Math.PI / 2;
     sign.userData.lod = 'detail';
     group.add(sign);

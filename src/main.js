@@ -1814,14 +1814,14 @@ function start(world, user, scene, camera, renderer) {
       sceneLighting?.applyDaylight(clock.elapsedTime / DAY_LENGTH_S);
     }
 
-    // 阴影相机按 4m 网格吸附跟随玩家（避免每帧移动导致静态建筑阴影滑移，减少矩阵更新）
+   // 阴影相机按固定网格吸附跟随玩家（固定目标 y=0，避免跳跃/行走引发建筑阴影闪烁）
     const sun = sceneLighting?.sun;
-    if (sun) {
+    if (sun && !mapView.active) {
       const sx = Math.round(player.mesh.position.x / 4) * 4;
       const sz = Math.round(player.mesh.position.z / 4) * 4;
       if (sun.target.position.x !== sx || sun.target.position.z !== sz) {
         sun.position.set(sx + 28, 42, sz + 18);
-        sun.target.position.set(sx, player.mesh.position.y, sz);
+        sun.target.position.set(sx, 0, sz);
         sun.target.updateMatrixWorld();
         renderer.shadowMap.needsUpdate = true;
       }
