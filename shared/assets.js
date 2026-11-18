@@ -10,6 +10,7 @@
 export const MAX_LEVEL = 5;
 export const OFFLINE_CAP_MS = 24 * 60 * 60 * 1000; // 离线收益最多结算 24 小时
 export const PRESTIGE_THRESHOLD = 5e10; // 资本轮回门槛：500 亿（约等于买下一家黄金店）
+export const TELEPORT_COST = 100_000;   // 地图点击传送费用：¥10 万/次
 
 /** 资产分级：决定前端色带与文案 */
 export const TIERS = {

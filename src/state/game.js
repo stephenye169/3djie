@@ -226,6 +226,17 @@ class GameStore {
     }
   }
 
+  /** 地图点击传送：服务端校验并扣除 ¥10 万 */
+  async teleport(shopId) {
+    try {
+      const res = await api.teleport(shopId);
+      this.patchBalance(res.balance);
+      return { ok: true, cost: res.cost, balance: res.balance };
+    } catch (err) {
+      return { ok: false, message: err.message, status: err.status, body: err.body };
+    }
+  }
+
   /** 服务端已把余额算好：只补余额，不整体重拉状态（拾取很频繁） */
   patchBalance(balance) {
     if (!this.state || balance == null) return;

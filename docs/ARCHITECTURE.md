@@ -77,7 +77,7 @@
 | 高度 | 1.6 | 0.3 | 35 ~ 170（滚轮缩放） |
 | pitch 范围 | -0.4 ~ 1.2（默认 0.16） | -0.3 ~ 0.18 | 固定斜俯视 |
 
-- **地图总览特性**：复用同一 `scene` 与 `camera`，进入时 0.9s 补间拉升高度，雾密度从 `0.007` 降至 `0.0016`、`camera.far` 拉至 `1200`；支持左键拖拽平移、滚轮缩放、屋顶店名标签、玩家实时定位（`setPlayerMarker`）与路线预览（`showRoute`），**点击标签或建筑可 1.1s 飞到店铺门口上空并传送落地（自动弹出信息卡）**。进入期间禁用 `tpCamera` 与 `interaction`。
+- **地图总览特性**：复用同一 `scene` 与 `camera`，进入时 0.9s 补间拉升高度，雾密度从 `0.007` 降至 `0.0016`、`camera.far` 拉至 `1200`；支持左键拖拽平移、滚轮缩放、屋顶店名标签、玩家实时定位（`setPlayerMarker`）与路线预览（`showRoute`），**点击标签或建筑可消耗 ¥10 万（经 `POST /api/game/teleport` 服务端扣款）1.1s 飞到店铺门口上空并传送落地**。进入期间禁用 `tpCamera` 与 `interaction`。
 
 ### 2.4 移动、碰撞与角色系统
 
@@ -184,6 +184,7 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 | **经济与成长** | POST | `/api/game/intro/grant` | 登录 | 新人逆袭引导一次性空投 ¥5000 万（幂等） |
 | | POST | `/api/game/worship` | 登录 | 膜拜全服首富领红包 `{ userId }` |
 | | POST | `/api/game/collect` / `bully` / `dividend` | 登录 | 拾取金币/宝箱、碰瓷 NPC、领离线分红 |
+| | POST | `/api/game/teleport` | 登录 | 地图模式点击传送（每次扣除 ¥10 万） |
 | | GET/POST | `/api/game/quests` / `claim` / `walked` | 登录 | 查询任务、领奖、上报步行距离 |
 | | POST | `/api/game/prestige` / `talents` | 登录 | 资本轮回 / 升级永久天赋 |
 | **众筹** | GET/POST | `/api/crowd/list` / `create` / `invest` / `claim` | 登录 | 众筹项目列表、发起、入股、领分红 |

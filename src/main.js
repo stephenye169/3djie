@@ -37,7 +37,7 @@ import { QuestCard } from './ui/QuestCard.js';
 import { PrestigePanel } from './ui/PrestigePanel.js';
 import { lootMoney } from './ui/LootFx.js';
 import { gameStore } from './state/game.js';
-import { formatMoney } from '../shared/assets.js';
+import { formatMoney, TELEPORT_COST } from '../shared/assets.js';
 import { getShopById } from './data/shops.js';
 import { getShopNpc } from './data/npcs.js';
 import { wallet } from './state/wallet.js';
@@ -664,7 +664,7 @@ function start(world, user, scene, camera, renderer) {
     crosshair.classList.remove('show');
     mapView.enter(player.position);
     locationEl.textContent = '青果巷 · 地图总览';
-    showToast('地图模式：拖拽平移 · 滚轮缩放 · 点击店名飞过去 · M/Esc 返回');
+    showToast(`地图模式：拖拽平移 · 滚轮缩放 · 点击店名传送（¥${formatMoney(TELEPORT_COST)}/次）· M/Esc 返回`);
   }
 
   function restoreStreetCamera(snapTarget) {
@@ -675,24 +675,38 @@ function start(world, user, scene, camera, renderer) {
     tpCamera.snap(snapTarget);
   }
 
+  let teleportPending = false;
+
   function exitMapToPlayer() {
-    if (!mapView.active || mapView.anim) return;
+    if (!mapView.active || mapView.anim || teleportPending) return;
     mapView.exitTo(tpCamera.pose(player.position), () => {
       restoreStreetCamera(player.position);
     });
   }
 
-  mapView.onPick = (point) => {
-    // 导航虚线：从玩家当前位置到目标门口（飞行航线可视化）
-    mapView.showRoute(player.mesh.position.x, player.mesh.position.z, point.landX, point.landZ);
-    mapView.flyTo(point, (p) => {
-      player.teleport(p.landX, p.landZ);
-      player.mesh.rotation.y = Math.PI; // 面向店铺
-      tpCamera.yaw = 0;
-      tpCamera.pitch = 0.16;
-      restoreStreetCamera(player.position);
-      showToast(`已到达「${p.shop.name}」`);
-    });
+  mapView.onPick = async (point) => {
+    if (teleportPending || mapView.anim || !mapView.active) return;
+    teleportPending = true;
+    try {
+      const res = await gameStore.teleport(point.shop?.id);
+      if (!res.ok) {
+        showToast(res.message || `余额不足，地图传送需要 ¥${formatMoney(TELEPORT_COST)}`);
+        return;
+      }
+      if (!mapView.active) return;
+      // 导航虚线：从玩家当前位置到目标门口（飞行航线可视化）
+      mapView.showRoute(player.mesh.position.x, player.mesh.position.z, point.landX, point.landZ);
+      mapView.flyTo(point, (p) => {
+        player.teleport(p.landX, p.landZ);
+        player.mesh.rotation.y = Math.PI; // 面向店铺
+        tpCamera.yaw = 0;
+        tpCamera.pitch = 0.16;
+        restoreStreetCamera(player.position);
+        showToast(`已传送至「${p.shop.name}」（-¥${formatMoney(TELEPORT_COST)}）`);
+      });
+    } finally {
+      teleportPending = false;
+    }
   };
 
   // M 键进入/退出地图模式

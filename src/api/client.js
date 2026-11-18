@@ -153,6 +153,8 @@ export const api = {
   // 资本轮回
   prestige: () => http('POST', '/api/game/prestige'),
   learnTalent: (talentId) => http('POST', '/api/game/talents', { talentId }),
+  // 地图点击传送（扣除 ¥10 万）
+  teleport: (shopId) => http('POST', '/api/game/teleport', { shopId }),
   // 玩家资料卡（GDD §5.3）
   playerProfile: (userId) => http('GET', `/api/game/profile/${userId}`),
   // 全服聊天（广场）：跨房间广播，3s 限频

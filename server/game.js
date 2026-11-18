@@ -10,6 +10,7 @@
  *   POST /api/game/surrender        原店主认栽
  *   GET  /api/game/battles          全服战报（弹幕历史）
  *   POST /api/game/worship          膜拜全服首富领红包（每人每小时一次）
+ *   POST /api/game/teleport         地图模式点击传送（每次扣除 ¥10 万）
  */
 import express from 'express';
 import { query, run, randomId, addBalance, deductBalance } from './db.js';
@@ -20,7 +21,7 @@ import { createAttack, defend, surrender, incomingAttack, pendingForShop, shopCo
 import { dividendStatus } from './treasure.js';
 import { questsFor } from './quests.js';
 import {
-  ASSETS, MAX_LEVEL, PRESTIGE_THRESHOLD, findAsset, assetValueOf, incomeOf, upgradeCostOf,
+  ASSETS, MAX_LEVEL, PRESTIGE_THRESHOLD, TELEPORT_COST, findAsset, assetValueOf, incomeOf, upgradeCostOf,
   titleFor, nextTitle, formatMoney,
 } from '../shared/assets.js';
 import {
@@ -422,6 +423,38 @@ router.post('/worship', authMiddleware, (req, res) => {
     cooldownMs: WORSHIP_COOLDOWN_MS,
     top1: top,
   });
+});
+
+// ============ 地图点击传送（¥10 万/次） ============
+
+router.post('/teleport', authMiddleware, (req, res) => {
+  const userId = req.user.id;
+  const shopId = String(req.body?.shopId || '');
+  const asset = shopId ? findAsset(shopId) : null;
+
+  settle(userId);
+  const row = query('SELECT balance FROM users WHERE id = ?', [userId])[0];
+  if (!row) return res.status(404).json({ error: '用户不存在' });
+
+  if (!deductBalance(userId, TELEPORT_COST)) {
+    const curBal = Number(row.balance || 0);
+    return res.status(402).json({
+      error: `余额不足，地图传送需要 ¥${formatMoney(TELEPORT_COST)}`,
+      need: TELEPORT_COST,
+      balance: Math.floor(curBal),
+      short: Math.ceil(Math.max(0, TELEPORT_COST - curBal)),
+    });
+  }
+
+  const now = Date.now();
+  const note = asset ? `地图传送至【${asset.name}】` : '地图传送';
+  run(
+    'INSERT INTO transaction_logs (id, user_id, kind, amount, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [randomId(), userId, 'teleport', -TELEPORT_COST, note, now]
+  );
+
+  const balance = Math.floor(Number(query('SELECT balance FROM users WHERE id = ?', [userId])[0]?.balance || 0));
+  res.json({ ok: true, cost: TELEPORT_COST, balance, shopId: asset?.id || null });
 });
 
 export default router;
