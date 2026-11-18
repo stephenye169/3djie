@@ -33,7 +33,7 @@
 - **坐标系**：`z = 0` 为东入口牌坊，往西 `z` 递减（`z = -494` 为西入口）；`+x` 为巷北，`-x` 为巷南。
 - **街道边界（`STREET`）**：巷宽 9m，行走范围 `x ∈ [-3.9, 3.9]`、`z ∈ [-491, 11]`；南市河位于巷南 `x = -25 ~ -44`。
 - **支巷（`LANES`）**：正素巷（`z = -88`）、天井巷（`z = -300`）、雪洞巷（`z = -365`），均向北延伸约 30–34m。
-- **建筑（`BUILDINGS`，约 55 栋）**：两侧用 `res-*` 民居连续填满，其中包含 **18 家可收购资产** 与 **5 家可推门进入的店铺**（咖啡 `z=-100`、面包房 `z=-112`、书店 `z=-214`、花坊 `z=-60` 南侧、数码 `z=-440`）。
+- **建筑（`BUILDINGS`，约 55 栋）**：两侧用 `res-*` 民居连续填满，其中包含 **18 家可收购商业资产**（全部已支持按 `E` 推门进入店内浏览商品与对话，未收购前点柜台同样可触发收购面板）。
 
 | z 位置 | 地标 | 说明 |
 | --- | --- | --- |
@@ -77,7 +77,7 @@
 | 高度 | 1.6 | 0.3 | 35 ~ 170（滚轮缩放） |
 | pitch 范围 | -0.4 ~ 1.2（默认 0.16） | -0.3 ~ 0.18 | 固定斜俯视 |
 
-- **地图总览特性**：复用同一 `scene` 与 `camera`，进入时 0.9s 补间拉升高度，雾密度从 `0.007` 降至 `0.0016`、`camera.far` 拉至 `1200`；支持左键拖拽平移、滚轮缩放及显示屋顶店名标签。进入期间禁用 `tpCamera` 与 `interaction`。**当前仅作总览定位，不支持点击标签或建筑飞行传送。**
+- **地图总览特性**：复用同一 `scene` 与 `camera`，进入时 0.9s 补间拉升高度，雾密度从 `0.007` 降至 `0.0016`、`camera.far` 拉至 `1200`；支持左键拖拽平移、滚轮缩放、屋顶店名标签、玩家实时定位（`setPlayerMarker`）与路线预览（`showRoute`），**点击标签或建筑可 1.1s 飞到店铺门口上空并传送落地（自动弹出信息卡）**。进入期间禁用 `tpCamera` 与 `interaction`。
 
 ### 2.4 移动、碰撞与角色系统
 
@@ -96,9 +96,7 @@
 | --- | --- | --- |
 | **标签裁剪（Label Culling）** | `main.js` `updateRemoteLabels()` | `<10m` 完整双行气泡、`10–50m` 单行昵称、`>50m` 隐藏；`THREE.Frustum` 视锥剔除；每帧最多显示 8 个完整气泡；私聊对象与踢馆攻击者强制保留 |
 | **遮挡剔除（代理盒）** | `main.js` `_labelOccluded()` | 每 300ms 用独立 `_occlRay` 向每店 12 三角隐形包围盒代理发射线（`far = 距离 - 0.5m`）。**注意**：射线若可能命中 Sprite 必须显式赋值 `_occlRay.camera = camera`，否则会抛出 `matrixWorld` 空指针 |
-| **LOD 距离分片** | `ProceduralStreet.js` + `main.js` | 门窗/店招/灯笼打 `userData.lod = 'detail'`，每 250ms 切换，30m 外隐藏细构件，三角面 -70% |
-| **渐进式加载** | `ProceduralStreet.js` | 首屏同步仅建 30m 内建筑，其余由 `requestIdleCallback` 每批 3 栋异步补齐；门口坐标纯数据预计算，不依赖 mesh |
-| **几何体合并 + 矩阵冻结** | `ProceduralStreet.js` `mergeStreetGeometries()` | 按「归属 × 材质 × LOD」分桶合并并烘焙世界坐标，`freezeStatic()` 冻结静态矩阵。**Draw calls 从 3042 → 349（↓88.5%）** |
+| **简化几何 + 同步全街合并** | `ProceduralStreet.js` | 门窗/店招采用极简轻量体块（整条街约 3–4k 三角面）与不透明材质并留出 Z 轴干净缝隙防 Z-fighting 闪烁；进场前一次性同步构建并按「`shopId` / `common` × 材质」合并及 `freezeStatic()` 冻结静态矩阵（已不再使用旧版细构件 LOD 切换与分批弹出） |
 | **角色几何合并** | `Player.js` | 用 `BufferGeometryUtils.mergeGeometries` 按材质合并同角色部件并减半曲面 segment，单角色 draw call 大幅下降 |
 | **CanvasTexture 对象池** | `src/utils/canvasPool.js` | 池上限 32，复用名牌与保护期倒计时画布，原地重绘避免每秒 `new CanvasTexture` |
 | **阴影与设备分档** | `Scene.js` + `main.js` | 阴影贴图 2048→1024，阴影相机跟随玩家且每 500ms 更新一次 `shadowMap.needsUpdate`；移动端自动关闭 AA、阴影并将 `pixelRatio` 限至 1.5 |
@@ -123,8 +121,8 @@ npm run fps
 | **A. 生产节奏**（4s/动作） | 300/300，握手 p95 672ms | p50 1.00s / p95 1.01s，下行 1.6 MB/s，0 断线 | 83 rps，业务 p95 < 61ms，0% 错误 | 65 次/s（约 425 MB / 30s） |
 | **B. 极限点击**（0.6s/动作） | 300/300 | p50 1.14s / p95 1.48s | 217 rps，端到端 p50 劣化至 **8.0–8.6s** | **182 次/s**（打满单进程上限） |
 
-- **后端瓶颈结论**：瓶颈在 `sql.js` 每次 `run()` 全库导出覆盖写盘的模型（上限 ≈ 180–190 写/秒，即 300 人并发时平均每 1.7s 可承受 1 次写库），而非 WebSocket 广播。超高并发需切换 `better-sqlite3`（WAL）或对高频写操作做批处理。
-- **前端帧率结论**：`scripts/profile-test.mjs` 定位业务 JS 仅占 CPU 0.8%，瓶颈全在 WebGL draw call。经 `Player.js` 合并第一轮优化后，**draw call 减半（-52%）**，30 人同房平均帧率从 **36.3 FPS 提升至 ~51 FPS**（剔除切窗干扰）；待对 `ProceduralStreet.js` 建筑进一步合并并降 segment 后可稳定 **60+ FPS**。
+- **后端瓶颈结论**：早先压测（2026-11-17）瓶颈在于每次 `run()` 同步导出全库写盘（上限 ≈ 180–190 写/秒）；现 `server/db.js` 已改为 `scheduleSave()` **400ms 节流异步原子落盘**以消除逐次阻塞事件循环，但超高并发写入仍需切换 `better-sqlite3`（WAL 增量写）或对高频写操作做批处理。
+- **前端帧率结论**：`scripts/profile-test.mjs` 定位业务 JS 仅占 CPU 0.8%，瓶颈在 WebGL draw call；经 `Player.js` 几何合并后，30 人同房平均帧率由 36.3 FPS 升至 ~51 FPS；此后 `ProceduralStreet.js` 已完成极简化与全街按材质合并，30 人同房实测表现可基于最新版代码复测。
 
 ---
 
@@ -134,7 +132,7 @@ npm run fps
 
 - **默认存储**：`sql.js`（SQLite WASM，零编译依赖），文件位于 `data/qingguo.db`；私聊记录单独以 **O(1) JSONL 追加写**存放在 `data/messages.jsonl`，崩溃不损历史。
 - **无损迁移 MySQL 预留**：
-  1. 全库采用 ANSI 标准 SQL（无 `INSERT OR REPLACE` / `AUTOINCREMENT` 等方言）。
+  1. 建表类型与常规查询采用标准 SQL（无 `AUTOINCREMENT`），仅 `capital.js` / `treasure.js` / `crowd.js` / `quests.js` 少量 upsert 使用了 `INSERT OR REPLACE` 或 `ON CONFLICT(...) DO UPDATE`（迁 MySQL 时统一替换为 `ON DUPLICATE KEY UPDATE`）。
   2. 所有业务模块统一通过 `server/db.js` 导出的 `run(sql, params)` / `query(sql, params)` 访库。
   3. 已预置 `node server/migrate-to-mysql.js` 迁移脚本，后续在 `db.js` 实现 `mysql2` 分支并通过显式环境变量 `USE_MYSQL=true` 切换即可（当前 MySQL 分支尚未实现）。
 
@@ -145,24 +143,26 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 | type | 方向 | payload | 说明 |
 | --- | --- | --- | --- |
 | `hello` | C→S | `{ token }` | 鉴权握手与入房（满 30 人返回 `room-full` 并关闭） |
-| `position` | C→S | `{ x, z, yaw }` | 位置上报（每 2s） |
+| `position` | C→S | `{ x, z, yaw }` | 位置上报（同步给同房间玩家） |
+| `global_chat` | C→S | `{ text }` | **全服广场发言**（3s 限频，`dnd` 模式下禁言） |
+| `global_msg` | S→C | `{ id, from, text, ts }` | **全服广场广播**（全服在线连接接收） |
 | `dm` | C→S / S→C | `{ to, text }` / `{ from, to, text, ts }` | 一对一私聊（仅回显收发双方） |
-| `dm_history` | C→S | `{ with, limit }` | 拉取双人私聊历史 |
+| `dm_history` | C→S / S→C | `{ with, limit }` / `{ with, messages }` | 拉取双人私聊历史 |
 | `block` / `unblock` | C→S | `{ to }` | 拉黑 / 解除拉黑 |
-| `dnd` | C→S / S→C | `{ enabled }` | 「不想说话」勿扰开关 |
+| `dnd` | C→S / S→C | `{ enabled }` | 「不想说话」勿扰开关（同时禁用私聊与广场发言） |
 | `counter_offer` | C→S | `{ attackId, price }` | 踢馆防守方发起一次性还价 |
 | `counter_reply` | C→S | `{ attackId, accept }` | 踢馆攻击方同意或拒绝还价 |
-| `welcome` | S→C | `{ self, online, blocked, dnd }` | 握手成功回执 |
+| `welcome` | S→C | `{ self, room, online, globalHistory, blocked, dnd }` | 握手成功回执（含房间号与最近 30 条广场历史） |
 | `players` | S→C | `[{ id, nickname, variant, title, x, z, yaw }]` | 1Hz 推送**本房间**玩家位置与称号 |
 | `blocked` | S→C | `{ blocked: [id] }` | 拉黑列表变更回执 |
-| `shop_attack` | S→C | `{ attackId, shopId, shopName, attackerNick, bid, defendCost, expiresAt }` | **被踢馆警报**（仅发原店主，跨房可达） |
+| `shop_attack` | S→C | `{ attackId, shopId, shopName, attackerId, attackerNick, bid, defendCost, counterMin, counterMax, expiresAt }` | **被踢馆警报**（仅发原店主，跨房可达） |
 | `counter_pending` / `counter_ack` / `counter_rejected` / `counter_reply_ack` | S→C | — | 议价状态同步回执 |
-| `shop_attack_result` | S→C | `{ attackId, outcome, message, penalty }` | 踢馆结算通知（攻防双方） |
+| `shop_attack_result` | S→C | `{ attackId, outcome, message, settledPrice, ... }` | 踢馆结算通知（攻防双方） |
 | `battle` | S→C | `{ id, nickname, content, ts }` | **全服战报**（跨所有房间广播） |
 | `top1` | S→C | `{ userId, nickname, title, wealth }` | **首富易主**（跨所有房间广播） |
-| `error` | S→C | `{ msg, code }` | 如 `blocked`、`room-full`、`counter-error` |
+| `error` | S→C | `{ msg, code }` | 如 `blocked`、`room-full`、`counter-error`、`global-error` |
 
-> **私聊发起边界**：私聊消息只发给收发双方。**不允许**在 Tab 面板的在线列表中直接点选玩家发起新私聊；新私聊必须在街道上走近对方（4 米内）点击其 3D 角色发起（距离过远提示「离得太远」）。
+> **私聊与广场发起方式**：私聊消息仅回显给收发双方。除可在街道上走近对方（4 米内）点击其 3D 角色快捷发起私聊外，**也可直接在 Tab 聊天面板的在线列表中点选任意在线玩家发起私聊**（不限距离与室内外场景）。
 
 ### 4.3 HTTP REST 路由表
 
@@ -174,9 +174,10 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 | | POST | `/api/auth/register` / `login` | 公开 | 注册 / 登录（bcryptjs + JWT） |
 | | GET | `/api/me` | 登录 | 当前用户信息 |
 | | GET | `/api/chat/rooms` | 公开 | 1–10 号房在线人数与容量 |
-| **商铺** | GET | `/api/shops` / `/:id/products` | 公开 | 进店商铺与商品清单 |
-| | POST | `/api/orders` | 登录 | 事务扣款下单 |
+| **商铺** | GET | `/api/shops` / `/:id/products` | 公开 | 18 家可进店商铺与商品清单 |
+| | GET/POST | `/api/orders/my` / `/api/orders` | 登录 | 查询我的历史订单 / 扣款下单 |
 | **游戏核心** | GET | `/api/game/state` | 登录 | 全量游戏状态唯一数据源（资产/分红/踢馆/首富/任务/轮回） |
+| | GET | `/api/game/profile/:userId` | 登录 | 指定玩家公开资料卡（不含现金余额） |
 | | POST | `/api/game/acquire` / `upgrade` | 登录 | 收购无主店 / 豪华装修（最高 5 级） |
 | | POST | `/api/game/attack` / `defend` / `surrender` | 登录 | 发起踢馆 / 强力护盘 / 认栽 |
 | | GET | `/api/game/battles` / `leaderboard` | 公开/登录 | 最近 40 条战报 / 首富榜 Top 10 |
@@ -260,7 +261,7 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 2. 在 `src/data/layout.js` 对应条目增加 `model: 'cafe.glb'`；或按 `<id>.glb` 命名后访问 `?models=/models` 自动批量匹配。
 3. 模型立面需朝 `-x`（北侧）/ `+x`（南侧），默认等比缩放到 `d × w × (h + 1.2)` 并居中贴地（加 `modelFit: 'none'` 可关闭自动适配）。
 4. 后台异步替换网格与碰撞体，保留原有店招、触发圈与可收购绑定；若 404/解析失败自动保留程序化建筑。
-   > ⚠️ **合批时机提醒**：由于当前渐进加载完成后会调用 `mergeStreetGeometries()` 合并网格，开启真实 GLB 替换时需保证模型替换在合并前完成或跳过对应栋合批。
+   > ⚠️ **合批时机提醒**：由于当前程序化街道默认会调用 `mergeStreetGeometries()` 合并静态网格，开启逐栋 GLB 替换时需保证模型替换在合并前完成或跳过对应栋合批。
 
 ### B. 整场景替换（`?glb=`）
 
@@ -272,6 +273,6 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 
 - **无美术资产与触屏适配**：仓库未附带 `.glb` 与贴图；操作依赖桌面键盘与 Pointer Lock。
 - **远端玩家局限**：进店后其他玩家无法进入室内同步，远端角色仍停留在店门口；远端移动仅做位置/朝向插值，暂不播放走路摆臂。
-- **单机 SQLite 写锁**：`sql.js` 每次写入全量落盘，勿多进程并发写同一 `.db` 文件（压测需用 `DB_PATH` 隔离）；单进程写入上限 ~180–190 次/s。
-- **建筑合批未完结**：角色合并后 30 人同房约 ~51 FPS，仍待对 `ProceduralStreet.js` 建筑网格进行第二轮合批与降面以稳定 60+ FPS。
+- **单机 SQLite 写锁**：`sql.js` 现为 400ms 节流异步全量快照落盘，仍勿多进程并发写同一 `.db` 文件（压测需用 `DB_PATH` 隔离）；早先同步落盘基准上限 ~180–190 次/s。
+- **多人同屏帧率待复测**：角色合批后 30 人同房约 ~51 FPS；现 `ProceduralStreet.js` 已简化建筑体块并全街按材质合并，可基于当前版本复测 30 人同房帧率表现。
 - **前端拾取与局部状态**：金币雨掉落位置由前端触发（奖励仍由后端生成防篡改）；秘书人设与静音配置仅存在浏览器 `localStorage`。
