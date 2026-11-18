@@ -7,22 +7,18 @@ import { STREET, LANES, BUILDINGS, PAIFANG, WEST_GATE } from '../data/layout.js'
 /**
  * 程序化街道（按 layout.js 的真实位置数据生成）
  *
- * 目标：像百度地图 3D 视图那样——形体可以简单，但每栋楼的位置、左右与先后顺序
- * 必须与现实对应。所有建筑尺寸、朝向、沿街顺序全部来自 data/layout.js。
+ * 简化极速版：
+ * - 一次性同步构建并合并全街（轻量体块，仅约 3~4k 三角面，毫秒级完成），
+ *   消除“先出 2 栋、其余突然弹出”的加载断层
+ * - 相邻建筑沿 Z 留出干净缝隙，屋顶/门窗/店招零共面叠片，彻底消除 Z-fighting 闪烁
+ * - 店招改用不透明材质，避免透明排序闪烁
  */
-/** LOD：细构件的显示距离（相机 30m 内显示门窗/店招/灯笼，更远只留体块） */
-const LOD_DETAIL_M = 30;
-/** 渐进加载：覆盖整条 500m 街道范围，进街前即全部构建合并完毕，避免进入后建筑刷新/弹出 */
-const PROGRESSIVE_NEAR_M = 600;
-const PROGRESSIVE_BATCH = 8;
+const PROGRESSIVE_NEAR_M = 10000;
+const PROGRESSIVE_BATCH = 50;
 
 /**
  * @param {THREE.Scene} scene
  * @param {{spawnZ?: number, progressive?: boolean, onModelRequest?: (req: {building: object, group: THREE.Group, collider: THREE.Box3, url: string}) => void}} [opts]
- *   progressive 默认开启：首屏只同步建 600m 内建筑，其余 requestIdleCallback 分批补齐；
- *   返回值里的 progressive.done 在全部建筑建成时 resolve（用于刷新地图标注等下游）。
- *   onModelRequest：layout.js 里带 model 的建筑会把「程序化占位 + 模型地址」交出去，
- *   由 WorldLoader 后台加载 GLB 后就地替换；加载失败/未提供回调时程序化建筑原样保留（回退）。
  */
 export function buildProceduralStreet(scene, opts = {}) {
   const root = new THREE.Group();
@@ -32,7 +28,7 @@ export function buildProceduralStreet(scene, opts = {}) {
   const colliders = [];
   const shopMeshes = [];
   const lodMeshes = [];
-  const occluderProxies = []; // 遮挡剔除代理：渐进模式下由 finalizeMerge 填充
+  const occluderProxies = [];
   const materials = new Map();
 
   _buildGround(root, materials);
@@ -42,17 +38,14 @@ export function buildProceduralStreet(scene, opts = {}) {
   _buildWestGate(root, materials, colliders);
 
   const spawnZ = Number(opts.spawnZ) || 10;
-  const progressive = opts.progressive !== false;
-  const lodOut = lodMeshes;
+  const progressive = opts.progressive === true;
 
-  // 逐建筑 GLB 替换请求（渐进加载期间随时可能追加，所以用回调而不是一次性列表）
   const modelRequests = [];
   const requestModel = (req) => {
     modelRequests.push(req);
     opts.onModelRequest?.(req);
   };
 
-  // 按与出生点的距离排序：近的先建（首屏可见），远的后台分批补齐
   const ordered = [...BUILDINGS].sort(
     (a, b) => Math.abs(a.z - spawnZ) - Math.abs(b.z - spawnZ)
   );
@@ -63,13 +56,13 @@ export function buildProceduralStreet(scene, opts = {}) {
   }
 
   for (const building of near) {
-    const shopGroup = _buildBuilding(root, building, materials, colliders, lodOut, requestModel);
+    const shopGroup = _buildBuilding(root, building, materials, colliders, requestModel);
     if (shopGroup) shopMeshes.push(shopGroup);
   }
 
   const scheduleIdle = typeof requestIdleCallback === 'function'
     ? requestIdleCallback
-    : (fn) => setTimeout(fn, 60);
+    : (fn) => setTimeout(fn, 16);
   let farIndex = 0;
   let resolveDone = null;
   const done = new Promise((resolve) => { resolveDone = resolve; });
@@ -78,7 +71,7 @@ export function buildProceduralStreet(scene, opts = {}) {
     const batch = far.slice(farIndex, farIndex + PROGRESSIVE_BATCH);
     farIndex += batch.length;
     for (const building of batch) {
-      const shopGroup = _buildBuilding(root, building, materials, colliders, lodOut, requestModel);
+      const shopGroup = _buildBuilding(root, building, materials, colliders, requestModel);
       if (shopGroup) shopMeshes.push(shopGroup);
     }
     if (farIndex < far.length) scheduleIdle(buildNextFar);
@@ -89,18 +82,17 @@ export function buildProceduralStreet(scene, opts = {}) {
 
   _buildLanternPosts(root, materials);
 
-  /** 渐进完成后的收尾：几何合并 + 静态矩阵冻结（draw call 大幅下降） */
   let mergedDone = false;
   const finalizeMerge = () => {
     if (mergedDone) return occluderProxies;
     mergedDone = true;
-    const proxies = mergeStreetGeometries(root, lodMeshes);
+    const proxies = mergeStreetGeometries(root);
     freezeStatic(root);
     occluderProxies.push(...proxies);
     return proxies;
   };
 
-  if (far.length === 0) finalizeMerge(); // 非渐进 / 全部首屏：立即收尾
+  if (far.length === 0) finalizeMerge();
 
   return {
     colliders,
@@ -121,20 +113,15 @@ export function buildProceduralStreet(scene, opts = {}) {
 
 /**
  * 几何体合并（Draw Call 优化）：
- * 按「归属（shopId / common / 50m 分段 detail）× 材质 × LOD 档」分桶，桶内构件合成单个 Mesh。
- * - shop 建筑按栋独立合并，并挂回各自的 shopGroup 局部空间（保持拔高缩放与包围盒有效）
- * - 公共构件（路面/河/牌坊/灯杆/民居）合并进 common 桶；民居 detail 按 50m 分段，避免整街一起闪现
- * - detail（门窗/店招/灯笼）单独成桶并记录世界坐标 lodCenter，保留 LOD 远距离整体隐藏
- * - 烘焙坐标后统一 toNonIndexed，避免 attributes/index 不一致导致合并失败
+ * - shop 建筑按「shopId × 材质」合并回各自的 shopGroup 局部空间（保持拔高缩放、点击与包围盒）
+ * - 民居/路面/牌坊等公共静态物体按材质合并进 root
  */
-function mergeStreetGeometries(root, lodMeshes) {
-  lodMeshes.length = 0; // 旧的单构件 detail mesh 即将被移除，清空避免 LOD 定时器遍历死引用
-
-  root.updateMatrixWorld(true); // 渐进构建后矩阵可能未传播，先完整烘焙
+function mergeStreetGeometries(root) {
+  root.updateMatrixWorld(true);
 
   const buckets = new Map();
   const doomed = [];
-  const occluderProxies = []; // 遮挡剔除射线用的隐形包围盒代理（每栋 shop 1 个，代替打几千三角的合并 mesh）
+  const occluderProxies = [];
   const shopBoxes = new Map();
   const ownerInvCache = new Map();
   const relMatrix = new THREE.Matrix4();
@@ -156,12 +143,10 @@ function mergeStreetGeometries(root, lodMeshes) {
     if (!mat) return;
     const shopId = obj.userData?.shopId ?? null;
     const ownerGroup = findOwnerGroup(obj, shopId);
-    const lod = obj.userData?.lod === 'detail' ? 'detail' : 'core';
-    const lodScope = shopId ?? (lod === 'detail' ? `common-z${Math.round(obj.matrixWorld.elements[14] / 50)}` : 'common');
-    const key = `${lodScope}|${mat.uuid}|${lod}`;
+    const key = `${shopId ?? 'common'}|${mat.uuid}`;
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { material: mat, shopId, ownerGroup, detail: lod === 'detail', geos: [], castShadow: false, receiveShadow: false };
+      bucket = { material: mat, shopId, ownerGroup, geos: [], castShadow: false, receiveShadow: false };
       buckets.set(key, bucket);
     }
     if (obj.castShadow) bucket.castShadow = true;
@@ -195,16 +180,6 @@ function mergeStreetGeometries(root, lodMeshes) {
     mesh.castShadow = bucket.castShadow;
     mesh.receiveShadow = bucket.receiveShadow;
     if (bucket.shopId) mesh.userData.shopId = bucket.shopId;
-    if (bucket.detail) {
-      mesh.userData.lod = 'detail';
-      const lodCenter = new THREE.Vector3();
-      if (merged.boundingBox) {
-        merged.boundingBox.getCenter(lodCenter);
-        if (ownerGroup !== root) lodCenter.applyMatrix4(ownerGroup.matrixWorld);
-      }
-      mesh.userData.lodCenter = lodCenter;
-      lodMeshes.push(mesh);
-    }
     ownerGroup.add(mesh);
 
     if (bucket.shopId && merged.boundingBox) {
@@ -219,7 +194,7 @@ function mergeStreetGeometries(root, lodMeshes) {
     }
   }
 
-  // 为每栋 shop 建筑建一个隐形包围盒代理（仅参与遮挡剔除射线，visible=false 不渲染）
+  // 为每栋 shop 建筑建 1 个隐形包围盒代理（供遮挡剔除射线快速检测）
   const proxyMat = new THREE.MeshBasicMaterial();
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
@@ -229,7 +204,7 @@ function mergeStreetGeometries(root, lodMeshes) {
     if (size.x <= 0 || size.y <= 0 || size.z <= 0) continue;
 
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), proxyMat);
-    proxy.visible = false; // 不渲染，仅被遮挡剔除射线命中
+    proxy.visible = false;
     proxy.position.copy(center);
     proxy.userData.shopId = shopId;
     root.add(proxy);
@@ -264,23 +239,23 @@ function _buildGround(parent, cache) {
   const length = PAIFANG.z - STREET.westZ;
   const centerZ = (PAIFANG.z + STREET.westZ) / 2;
 
-  // 巷子石板路
+  // 巷子石板路（top = 0.06）
   const alley = new THREE.Mesh(new THREE.BoxGeometry(STREET.halfWidth * 2, 0.06, length), pavingMat);
   alley.position.set(0, 0.03, centerZ);
   alley.receiveShadow = true;
   parent.add(alley);
 
-  // 东入口广场
-  const plaza = new THREE.Mesh(new THREE.BoxGeometry(16, 0.06, 8), pavingMat);
-  plaza.position.set(0, 0.036, 10);
+  // 东入口广场（独立抬高 1cm，避免与巷路共面闪烁）
+  const plaza = new THREE.Mesh(new THREE.BoxGeometry(16, 0.07, 8), pavingMat);
+  plaza.position.set(0, 0.035, 10);
   plaza.receiveShadow = true;
   parent.add(plaza);
 
-  // 北侧建筑后的底色地面，避免缝隙漏出天空
+  // 底色地面（压低 6cm，彻底避免与路面底面接触）
   const backMat = _material(cache, 'backdrop', 0x6f6a60, { roughness: 1 });
   const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(140, length + 40), backMat);
   backdrop.rotation.x = -Math.PI / 2;
-  backdrop.position.set(30, -0.02, centerZ);
+  backdrop.position.set(30, -0.06, centerZ);
   backdrop.receiveShadow = true;
   parent.add(backdrop);
 }
@@ -290,14 +265,12 @@ function _buildRiver(parent, cache) {
   const length = PAIFANG.z - STREET.westZ;
   const centerZ = (PAIFANG.z + STREET.westZ) / 2;
 
-  // 南市河水面
   const waterMat = _material(cache, 'water', 0x4a6b78, { roughness: 0.15, metalness: 0.35 });
   const water = new THREE.Mesh(new THREE.PlaneGeometry(xNear - xFar, length), waterMat);
   water.rotation.x = -Math.PI / 2;
   water.position.set((xNear + xFar) / 2, y, centerZ);
   parent.add(water);
 
-  // 河岸石栏（南侧临河民居的驳岸）
   const bankMat = _material(cache, 'bank', 0x8c887e, { roughness: 0.95 });
   const bank = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.4, length), bankMat);
   bank.position.set(xNear - 0.35, y + 0.6, centerZ);
@@ -313,7 +286,7 @@ function _buildLanes(parent, cache) {
       new THREE.BoxGeometry(lane.length, 0.05, lane.width),
       laneMat
     );
-    strip.position.set(STREET.halfWidth + lane.length / 2, 0.028, lane.z);
+    strip.position.set(STREET.halfWidth + lane.length / 2, 0.025, lane.z);
     strip.receiveShadow = true;
     parent.add(strip);
   }
@@ -325,7 +298,6 @@ function _buildLanes(parent, cache) {
 
 function _buildPaifang(parent, cache, colliders) {
   const woodMat = _material(cache, 'paifang', 0x5d4a3a, { roughness: 0.85 });
-  const roofMat = _material(cache, 'roof', 0x41454d, { roughness: 0.9 });
   const span = PAIFANG.width;
 
   for (const x of [-span / 2 + 0.6, -1.7, 1.7, span / 2 - 0.6]) {
@@ -342,7 +314,6 @@ function _buildPaifang(parent, cache, colliders) {
     );
   }
 
-  // 三道额枋
   for (const y of [4.0, 5.15, 6.6]) {
     const beam = new THREE.Mesh(new THREE.BoxGeometry(span, 0.3, 0.5), woodMat);
     beam.position.set(0, y, PAIFANG.z);
@@ -350,18 +321,16 @@ function _buildPaifang(parent, cache, colliders) {
     parent.add(beam);
   }
 
-  // 匾额（正反两面）
-  const plaqueGeo = new THREE.BoxGeometry(3.0, 0.95, 0.18);
-  const plaque = new THREE.Mesh(plaqueGeo, woodMat);
+  const plaque = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.95, 0.18), woodMat);
   plaque.position.set(0, 5.75, PAIFANG.z);
   parent.add(plaque);
 
+  const plaqueMat = new THREE.MeshBasicMaterial({
+    map: _textTexture('青果巷', { bg: '#3a2c22', color: '#f3dcb0' }),
+  });
   for (const dir of [1, -1]) {
-    const face = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.8, 0.8),
-      new THREE.MeshBasicMaterial({ map: _textTexture('青果巷', { bg: '#3a2c22', color: '#f3dcb0' }), transparent: true })
-    );
-    face.position.set(0, 5.75, PAIFANG.z + dir * 0.1);
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.8), plaqueMat);
+    face.position.set(0, 5.75, PAIFANG.z + dir * 0.11);
     if (dir < 0) face.rotation.y = Math.PI;
     parent.add(face);
   }
@@ -397,10 +366,10 @@ function _buildWestGate(parent, cache, colliders) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 单体建筑                                                             */
+/* 单体建筑（简洁白墙黛瓦体块，零叠片，易加载不闪烁）                    */
 /* ------------------------------------------------------------------ */
 
-function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel = null) {
+function _buildBuilding(parent, b, cache, colliders, requestModel = null) {
   const sideSign = b.side === 'north' ? 1 : -1;
   const setback = b.setback || 0;
   const centerX = sideSign * (STREET.halfWidth + setback + b.d / 2);
@@ -424,150 +393,112 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
   const roofMat = _tintedMaterial(cache, 'roof', b.id, ROOF_TINTS, { roughness: 0.9 });
   const plinthMat = _material(cache, 'plinth', 0x8b8780, { roughness: 0.95 });
   const woodMat = _material(cache, 'wood', 0x6a4632, { roughness: 0.88 });
-  const glassMat = _material(cache, 'glass', 0x2f3b46, { roughness: 0.2, metalness: 0.35 });
+  const glassMat = _material(cache, 'glass', 0x2f3b46, { roughness: 0.25, metalness: 0.3 });
 
+  // 沿 Z 向内收缩 0.08m，确保相邻建筑之间留出干净缝隙，绝不共面闪烁
+  const cleanW = Math.max(0.8, b.w - 0.08);
   const plinthH = 0.4;
   const eaveY = plinthH + b.h;
 
-  // 台基（沿街方向保留前后余量，沿 Z 收缩 0.02 避免与紧邻建筑共面 Z-fighting）
-  const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.4, plinthH, Math.max(0.5, b.w - 0.02)), plinthMat);
+  // 1. 台基
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.3, plinthH, cleanW), plinthMat);
   plinth.position.y = plinthH / 2;
   plinth.receiveShadow = true;
   group.add(plinth);
 
-  // 墙身
-  const body = new THREE.Mesh(new THREE.BoxGeometry(b.d, b.h, b.w), wallMat);
+  // 2. 主体墙身
+  const body = new THREE.Mesh(new THREE.BoxGeometry(b.d, b.h, cleanW), wallMat);
   body.position.y = plinthH + b.h / 2;
   body.castShadow = true;
   body.receiveShadow = true;
   group.add(body);
 
-  // 檐口
-  const cornice = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.7, 0.28, Math.max(0.5, b.w - 0.02)), roofMat);
-  cornice.position.y = eaveY + 0.02;
-  cornice.castShadow = true;
-  group.add(cornice);
+  // 3. 黛瓦挑檐 + 简洁重檐/屋顶体块（用梯形收分两层瓦顶代替繁杂交叉斜板，零共面/零穿插）
+  const eave = new THREE.Mesh(new THREE.BoxGeometry(b.d + 0.65, 0.26, cleanW), roofMat);
+  eave.position.y = eaveY + 0.13;
+  eave.castShadow = true;
+  eave.receiveShadow = true;
+  group.add(eave);
 
-  // 硬山双坡屋顶：沿进深方向按"进"分段，每段各自起脊，
-  // 避免深宅（d 30–55m）被做成一个十几米高的巨型屋面。
-  const segments = Math.max(1, Math.round(b.d / 8));
-  const segD = b.d / segments;
-  const rise = Math.min(segD * 0.42, 2.3);
-  const half = segD / 2 + 0.22;
-  const slopeLen = Math.hypot(half, rise);
-  const angle = Math.atan2(rise, half);
+  const roofH = Math.min(1.5, Math.max(0.65, b.d * 0.05));
+  const roofCap = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(1.2, b.d - 1.2), roofH, Math.max(0.6, cleanW - 0.4)),
+    roofMat
+  );
+  roofCap.position.y = eaveY + 0.26 + roofH / 2;
+  roofCap.castShadow = true;
+  roofCap.receiveShadow = true;
+  group.add(roofCap);
 
-  const triShape = new THREE.Shape();
-  triShape.moveTo(-segD / 2, 0);
-  triShape.lineTo(segD / 2, 0);
-  triShape.lineTo(0, rise);
-  triShape.closePath();
-  const gableGeo = new THREE.ExtrudeGeometry(triShape, { depth: 0.16, bevelEnabled: false });
+  // 4. 临街立面（简洁木门 + 窗，外凸足够距离不与墙面共面）
+  const frontSign = -sideSign;
+  const doorX = frontSign * (b.d / 2 + 0.04);
 
-  for (let i = 0; i < segments; i++) {
-    const segX = -b.d / 2 + segD * (i + 0.5);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.25, Math.min(1.5, cleanW * 0.22)), woodMat);
+  door.position.set(doorX, plinthH + 1.125, 0);
+  group.add(door);
 
-    for (const dir of [1, -1]) {
-      const slab = new THREE.Mesh(
-        new THREE.BoxGeometry(slopeLen, 0.16, Math.max(0.5, b.w - 0.02)),
-        roofMat
-      );
-      slab.position.set(segX + (dir * half) / 2, eaveY + rise / 2, 0);
-      slab.rotation.z = -dir * angle;
-      slab.castShadow = true;
-      slab.receiveShadow = true;
-      group.add(slab);
-    }
+  // 左右各放 1 扇简洁窗户（面宽够宽时），二层加 2 扇上窗
+  if (cleanW >= 6.5) {
+    const winOffset = Math.min(cleanW * 0.28, 3.8);
+    for (const wz of [-winOffset, winOffset]) {
+      const win = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.2, 1.15), glassMat);
+      win.position.set(doorX, plinthH + 1.55, wz);
+      group.add(win);
 
-    // 每段屋顶两端的山墙封头（收进建筑宽度内，避免探入紧邻建筑引发闪烁）
-    for (const dir of [1, -1]) {
-      const gable = new THREE.Mesh(gableGeo, wallMat);
-      gable.position.set(segX, eaveY, dir > 0 ? b.w / 2 - 0.16 : -b.w / 2);
-      gable.castShadow = true;
-      group.add(gable);
+      if (b.floors > 1) {
+        const upWin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.15, 1.15), glassMat);
+        upWin.position.set(doorX, eaveY - 1.25, wz);
+        group.add(upWin);
+      }
     }
   }
 
-  // ---- 临街立面（按开间排布门窗，避免整面白墙）----
-  const frontSign = -sideSign; // 立面朝向：北侧建筑朝 -x，南侧朝 +x
-  const frontX = frontSign * (b.d / 2 + 0.04);
-
-  const bayCount = Math.max(2, Math.round(b.w / 3.4));
-  const step = b.w / bayCount;
-  const doorBays = new Set([Math.floor((bayCount - 1) / 2)]);
-  if (bayCount >= 6) doorBays.add(Math.floor((bayCount - 1) / 2) + Math.floor(bayCount / 2));
-
-  for (let i = 0; i < bayCount; i++) {
-    const z = -b.w / 2 + step * (i + 0.5);
-
-    if (doorBays.has(i)) {
-      const doorW = Math.min(1.5, step * 0.55);
-      const door = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.3, doorW), woodMat);
-      door.position.set(frontX, plinthH + 1.15, z);
-      door.userData.lod = 'detail';
-      group.add(door);
-
-      // 门楣
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, doorW + 0.34), woodMat);
-      lintel.position.set(frontX, plinthH + 2.42, z);
-      lintel.userData.lod = 'detail';
-      group.add(lintel);
-    } else {
-      _addWindow(group, frontX, frontSign, z, plinthH + 1.55, woodMat, glassMat);
-    }
-
-    if (b.floors > 1) {
-      _addWindow(group, frontX, frontSign, z, eaveY - 1.25, woodMat, glassMat);
-    }
-  }
-
-  // 店招 / 名称匾
-  const label = b.name || _shopName(b.shopId);
+  // 5. 店铺 / 地标专属：牌匾 + 门前红灯笼（普通民居跳过，大幅减少纹理和面数）
+  const isFeatured = Boolean(b.shopId || b.kind === 'landmark');
+  const label = isFeatured ? (b.name || _shopName(b.shopId)) : '';
   if (label) {
-    const signY = Math.min(eaveY - 0.55, plinthH + 3.45);
+    const signY = Math.min(eaveY - 0.5, plinthH + 3.35);
     const sign = new THREE.Mesh(
-      new THREE.PlaneGeometry(Math.min(b.w * 0.62, 4.6), 0.82),
+      new THREE.PlaneGeometry(Math.min(cleanW * 0.6, 4.4), 0.8),
       new THREE.MeshBasicMaterial({
-        map: _textTexture(label, { bg: 'rgba(26,22,18,0.88)', color: '#f1d9a8' }),
-        transparent: true
+        map: _textTexture(label, { bg: '#1a1612', color: '#f1d9a8' }),
       })
     );
-    sign.position.set(frontX + frontSign * 0.11, signY, 0);
+    sign.position.set(frontSign * (b.d / 2 + 0.18), signY, 0);
     sign.rotation.y = -sideSign * Math.PI / 2;
-    sign.userData.lod = 'detail';
     group.add(sign);
   }
 
-  // 门口灯笼（复用缓存材质，合并进同一批次）
-  const lanternMat = _material(cache, 'lantern', 0xc0392b, {
-    emissive: 0x8c1d18,
-    emissiveIntensity: 0.55,
-    roughness: 0.7
-  });
-  for (const z of [-1.45, 1.45]) {
-    const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 12), lanternMat);
-    lantern.position.set(frontX + frontSign * 0.42, plinthH + 2.75, z);
-    lantern.userData.lod = 'detail';
-    group.add(lantern);
+  if (b.shopId) {
+    const lanternMat = _material(cache, 'lantern', 0xc0392b, {
+      emissive: 0x8c1d18,
+      emissiveIntensity: 0.55,
+      roughness: 0.7
+    });
+    for (const z of [-1.45, 1.45]) {
+      const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 6), lanternMat);
+      lantern.position.set(frontSign * (b.d / 2 + 0.42), plinthH + 2.75, z);
+      group.add(lantern);
+    }
   }
 
-  // 历史建筑：屋顶上方浮动名牌（地图式标注）
+  // 6. 历史建筑屋顶名牌
   if (b.kind === 'landmark' && b.name) {
-    const tagHeight = eaveY + rise + 1.0;
+    const tagHeight = eaveY + 0.26 + roofH + 1.0;
     const sprite = _labelSprite(b.name);
     sprite.position.set(0, tagHeight, 0);
-    sprite.userData.isBuildingLabel = true; // 换 GLB 时保留，并跟随新屋顶高度
+    sprite.userData.isBuildingLabel = true;
     group.add(sprite);
   }
 
-  // 碰撞体（取建筑外墙范围）；留引用，GLB 替换后按模型包围盒就地更新
+  // 碰撞体
   const colliderBox = new THREE.Box3(
     new THREE.Vector3(centerX - b.d / 2, 0, b.z - b.w / 2),
     new THREE.Vector3(centerX + b.d / 2, eaveY, b.z + b.w / 2)
   );
   colliders.push(colliderBox);
 
-  // 可交互资产绑定 shopId（店铺 + 可收购的历史建筑）
   if (b.shopId) {
     group.userData.shopId = b.shopId;
     group.traverse((obj) => {
@@ -575,14 +506,6 @@ function _buildBuilding(parent, b, cache, colliders, lodOut = null, requestModel
     });
   }
 
-  // LOD：收集远距离需要隐藏的细构件（门窗 / 门楣 / 店招 / 灯笼）
-  if (lodOut) {
-    group.traverse((obj) => {
-      if (obj.userData?.lod === 'detail') lodOut.push(obj);
-    });
-  }
-
-  // 真实 GLB：数据里给了 model（或 URL 带 ?models=）→ 交给 WorldLoader 后台替换
   const modelUrl = _resolveModelUrl(b);
   if (modelUrl && requestModel) {
     requestModel({ building: b, group, collider: colliderBox, url: modelUrl });
@@ -607,12 +530,12 @@ function _buildLanternPosts(parent, cache) {
   for (let z = -20; z > STREET.westZ + 10; z -= 55) {
     for (const sign of [-1, 1]) {
       const x = sign * (STREET.halfWidth - 0.7);
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.0, 8), poleMat);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 3.0, 6), poleMat);
       pole.position.set(x, 1.5, z);
       pole.castShadow = true;
       parent.add(pole);
 
-      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), glowMat);
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), glowMat);
       lamp.position.set(x, 3.05, z);
       parent.add(lamp);
     }
@@ -623,7 +546,6 @@ function _buildLanternPosts(parent, cache) {
 /* 材质与文字纹理                                                       */
 /* ------------------------------------------------------------------ */
 
-/** 白墙 / 黛瓦的几档色差，让相邻建筑不是同一块色板 */
 const WALL_TINTS = [0xf2ece0, 0xece4d3, 0xf7f2e9, 0xe7dfcc];
 const ROOF_TINTS = [0x41454d, 0x4a4e57, 0x3a3e45];
 
@@ -633,23 +555,9 @@ function _hash(text) {
   return h;
 }
 
-/** 按建筑 id 稳定地挑一档色差，材料仍按色档复用 */
 function _tintedMaterial(cache, prefix, seed, tints, options) {
   const idx = _hash(seed) % tints.length;
   return _material(cache, `${prefix}-${idx}`, tints[idx], options);
-}
-
-/** 一扇木框窗（挂在临街立面上） */
-function _addWindow(group, frontX, frontSign, z, y, woodMat, glassMat) {
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.35, 1.15), woodMat);
-  frame.position.set(frontX, y, z);
-  frame.userData.lod = 'detail';
-  group.add(frame);
-
-  const glass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.08, 0.9), glassMat);
-  glass.position.set(frontX + frontSign * 0.06, y, z);
-  glass.userData.lod = 'detail';
-  group.add(glass);
 }
 
 function _material(cache, key, color, options = {}) {
@@ -664,12 +572,6 @@ function _material(cache, key, color, options = {}) {
   return mat;
 }
 
-/**
- * 解析某栋建筑的真实模型地址：
- * 1. layout.js 显式 `model`（相对 /models/，或 / 开头、http(s) 完整地址）
- * 2. 否则看 URL 参数 `?models=/models`：按 `<building.id>.glb` 批量匹配，便于整街替换试模型
- * 都没有 → null（纯程序化）
- */
 function _resolveModelUrl(b) {
   if (b.model) {
     if (/^(https?:)?\/\//.test(b.model) || b.model.startsWith('/')) return b.model;
@@ -686,27 +588,22 @@ function _shopName(shopId) {
   return findAsset(shopId)?.name || '';
 }
 
-/** 生成带圆角深色底 + 暖金字的牌匾纹理 */
-function _textTexture(text, { bg = 'rgba(26,22,18,0.9)', color = '#f1d9a8', fontSize = 64 } = {}) {
+function _textTexture(text, { bg = '#1a1612', color = '#f1d9a8', fontSize = 64 } = {}) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 128;
   const ctx = canvas.getContext('2d');
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = bg;
-  _roundRect(ctx, 6, 6, canvas.width - 12, canvas.height - 12, 16);
-  ctx.fill();
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.strokeStyle = 'rgba(241,217,168,0.85)';
-  ctx.lineWidth = 4;
-  _roundRect(ctx, 10, 10, canvas.width - 20, canvas.height - 20, 12);
-  ctx.stroke();
+  ctx.lineWidth = 6;
+  ctx.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
 
   ctx.fillStyle = color;
   ctx.font = `700 ${fontSize}px "PingFang SC", "Microsoft YaHei", serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  // 名称过长时自动缩小字号
   let size = fontSize;
   while (ctx.measureText(text).width > canvas.width - 60 && size > 28) {
     size -= 4;
@@ -734,7 +631,6 @@ function _roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-/** 屋顶浮动名牌（Sprite，始终面向相机） */
 function _labelSprite(text) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;

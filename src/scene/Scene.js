@@ -49,7 +49,7 @@ export function createScene(container) {
   const camera = new THREE.PerspectiveCamera(
     60,
     window.innerWidth / window.innerHeight,
-    0.3,
+    0.4,
     500
   );
 
@@ -74,8 +74,8 @@ export function createScene(container) {
   sun.shadow.camera.bottom = -45;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 160;
- sun.shadow.bias = -0.0005;
-  sun.shadow.normalBias = 0.06;
+ sun.shadow.bias = -0.0008;
+  sun.shadow.normalBias = 0.08;
   scene.add(sun);
   scene.add(sun.target); // 阴影相机跟随玩家时需要 target 也加入场景
 
