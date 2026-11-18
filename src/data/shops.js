@@ -127,6 +127,156 @@ export const SHOPS = [
       { emoji: '🍮', name: '酒酿圆子', price: 12, desc: '小圆子配甜酒酿' },
       { emoji: '🥣', name: '藕粉圆子', price: 18, desc: '藕粉皮包芝麻馅' }
     ]
+  },
+  {
+    id: 'milktea',
+    name: '东牌坊奶茶铺',
+    emoji: '🧋',
+    category: '餐饮 · 茶饮',
+    desc: '牌坊下第一家奶茶铺，黑糖珍珠现煮现卖，队能排到街心。',
+    hours: '09:00 - 22:30',
+    phone: '0519-8888-0009',
+    rating: 4.5,
+    products: [
+      { emoji: '🧋', name: '黑糖珍珠鲜奶', price: 15, desc: '珍珠现煮，黑糖挂壁' },
+      { emoji: '🍵', name: '桂花乌龙', price: 12, desc: '本地桂花窨制，清爽解腻' },
+      { emoji: '🥤', name: '芋泥啵啵', price: 16, desc: '芋头现蒸，绵密带颗粒' }
+    ]
+  },
+  {
+    id: 'chenghuang',
+    name: '阳湖县城隍庙戏楼',
+    emoji: '🎭',
+    category: '文化 · 戏楼',
+    desc: '一百多年的老戏楼，梁上彩画未改，逢周末连唱两场。',
+    hours: '10:00 - 21:00',
+    phone: '0519-8888-0010',
+    rating: 4.8,
+    products: [
+      { emoji: '🎫', name: '戏楼前排票', price: 180, desc: '前三排，能看清水袖' },
+      { emoji: '🎟️', name: '戏楼后排票', price: 80, desc: '后排长凳，听个热闹' },
+      { emoji: '🍵', name: '茶水瓜子', price: 20, desc: '一壶茶配一碟瓜子' }
+    ]
+  },
+  {
+    id: 'memory',
+    name: '青果巷文化记忆馆',
+    emoji: '🏛',
+    category: '文化 · 展馆',
+    desc: '以巷名界碑为镇馆之宝的小型展馆，讲这条巷子一千年的来路。',
+    hours: '09:00 - 17:00',
+    phone: '0519-8888-0011',
+    rating: 4.6,
+    products: [
+      { emoji: '🎫', name: '记忆馆门票', price: 20, desc: '含常设展与临展' },
+      { emoji: '📖', name: '青果巷导览手册', price: 35, desc: '手绘街区图，附地标典故' },
+      { emoji: '✉️', name: '明信片一套', price: 25, desc: '八张，旧巷照片复刻' }
+    ]
+  },
+  {
+    id: 'songjiantang',
+    name: '松健堂',
+    emoji: '🌿',
+    category: '文化 · 书斋',
+    desc: '五进老宅改的书斋，收着字画、旧家具和一方天井。',
+    hours: '09:30 - 18:00',
+    phone: '0519-8888-0012',
+    rating: 4.6,
+    products: [
+      { emoji: '🌿', name: '松健堂香囊', price: 45, desc: '艾草与陈皮，手工缝制' },
+      { emoji: '🖌️', name: '手抄字帖', price: 68, desc: '掌柜亲笔，宣纸线装' },
+      { emoji: '📚', name: '旧书一册', price: 120, desc: '民国旧版，品相随机' }
+    ]
+  },
+  {
+    id: 'zhaoyuanren',
+    name: '赵元任故居',
+    emoji: '🎼',
+    category: '文化 · 故居',
+    desc: '语言学家赵元任的旧居，琴房里还摆着那架老钢琴。',
+    hours: '09:00 - 17:30',
+    phone: '0519-8888-0013',
+    rating: 4.7,
+    products: [
+      { emoji: '🎫', name: '故居门票', price: 25, desc: '含前厅、琴房、书房' },
+      { emoji: '🎼', name: '《教我如何不想她》曲谱', price: 40, desc: '影印手稿版' },
+      { emoji: '💿', name: '黑胶唱片', price: 260, desc: '赵元任作品选，复刻发行' }
+    ]
+  },
+  {
+    id: 'yunhongyi',
+    name: '恽鸿仪故居 · 可园',
+    emoji: '🏯',
+    category: '园林 · 可园',
+    desc: '三亩见方的宅园，廊子绕、假山旧，雨天听水最好。',
+    hours: '09:00 - 17:00',
+    phone: '0519-8888-0014',
+    rating: 4.7,
+    products: [
+      { emoji: '🎫', name: '可园门票', price: 30, desc: '含全园导览' },
+      { emoji: '🍵', name: '园中茶席', price: 88, desc: '水榭一席，两泡绿茶' },
+      { emoji: '🪨', name: '太湖石摆件', price: 320, desc: '园中同源石料，小件' }
+    ]
+  },
+  {
+    id: 'baguitang',
+    name: '八桂堂总部',
+    emoji: '🏦',
+    category: '商业 · 总部',
+    desc: '八桂堂刘国钧旧宅，如今是整条街最贵的会客与总部所在。',
+    hours: '10:00 - 22:00',
+    phone: '0519-8888-0015',
+    rating: 4.9,
+    products: [
+      { emoji: '🍽️', name: '八桂堂会席', price: 1200, desc: '八人席，主厨定制' },
+      { emoji: '🏮', name: '家宴定制', price: 8800, desc: '整进院子，含堂会' },
+      { emoji: '📈', name: '私募份额', price: 50000, desc: '入伙一份，年结一次' }
+    ]
+  },
+  {
+    id: 'banyuan',
+    name: '半园庄园',
+    emoji: '🌸',
+    category: '园林 · 庄园',
+    desc: '一半是园、一半让给街坊的宅园，两株老桂秋天香透半条巷。',
+    hours: '10:00 - 20:00',
+    phone: '0519-8888-0016',
+    rating: 4.8,
+    products: [
+      { emoji: '🍵', name: '半园茶会', price: 168, desc: '初一十五，园主亲泡' },
+      { emoji: '🍶', name: '桂花酿', price: 98, desc: '园中老桂窨制，一坛' },
+      { emoji: '📷', name: '园林写真', price: 880, desc: '一小时，含五张精修' }
+    ]
+  },
+  {
+    id: 'lihetang',
+    name: '礼和堂会所',
+    emoji: '📖',
+    category: '会所 · 文化',
+    desc: '礼和堂周氏旧宅，三楼是周有光图书馆，楼下是会所与茶室。',
+    hours: '10:00 - 23:00',
+    phone: '0519-8888-0017',
+    rating: 4.7,
+    products: [
+      { emoji: '🎟️', name: '会所日票', price: 600, desc: '含茶室、书房、小戏台' },
+      { emoji: '📚', name: '图书借阅卡', price: 200, desc: '周有光图书馆年卡' },
+      { emoji: '🥃', name: '雪茄吧单次', price: 380, desc: '含一杯威士忌' }
+    ]
+  },
+  {
+    id: 'finance',
+    name: '西入口金融中心',
+    emoji: '🏙',
+    category: '金融 · 总部',
+    desc: '西入口的三层玻璃楼，整条街的资金流水都从这里过。',
+    hours: '09:00 - 18:00',
+    phone: '0519-8888-0018',
+    rating: 4.4,
+    products: [
+      { emoji: '📊', name: '财富管理咨询', price: 2000, desc: '一对一，含资产体检' },
+      { emoji: '🔐', name: '保险箱年租', price: 1200, desc: '标准格，年付' },
+      { emoji: '🏦', name: '街铺贷月供', price: 5000, desc: '按揭试算，先付首月' }
+    ]
   }
 ];
 

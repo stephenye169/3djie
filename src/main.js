@@ -713,13 +713,9 @@ function start(world, user, scene, camera, renderer) {
     entrances,
     5,
     (shop) => {
-      // 触发圈内按 E：已收购才能进店，未收购先弹收购面板
+      // 触发圈内按 E：18 家资产都能推门进（顾客逛店），收购与否不影响进店；
+      // 未收购的店进店后点柜台会打开收购面板，与街面点击一致
       if (mode !== 'street') return;
-      const asset = gameStore.asset(shop.id);
-      if (asset && !asset.owned) {
-        interaction.open(shop);
-        return;
-      }
       enterShop(shop);
     }
   );

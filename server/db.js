@@ -568,6 +568,16 @@ function _seedShops() {
     ['wonton',  '巷口馄饨铺','街边小吃',  '🍜',  '开了三十年的老馄饨铺'],
     ['teahouse','青果茶肆',  '茶馆茶饮',  '🍵',  '临河茶肆，一壶绿茶消磨半日'],
     ['dessert', '糖芋苗小铺','甜品糖水',  '🍡',  '常州糖芋苗与酒酿圆子'],
+    ['milktea', '东牌坊奶茶铺','奶茶饮品',  '🧋',  '牌坊下第一家奶茶铺，黑糖珍珠现煮'],
+    ['chenghuang','阳湖县城隍庙戏楼','戏曲演出','🎭','一百多年的老戏楼，周末连唱两场'],
+    ['memory',  '青果巷文化记忆馆','文化展馆','🏛','以巷名界碑为镇馆之宝的小展馆'],
+    ['songjiantang','松健堂', '书斋茶室','🌿','五进老宅改的书斋，收字画旧家具'],
+    ['zhaoyuanren','赵元任故居','名人故居','🎼','语言学家赵元任旧居，琴房存有老钢琴'],
+    ['yunhongyi','恽鸿仪故居 · 可园','园林','🏯','三亩宅园，廊子绕、假山旧'],
+    ['baguitang','八桂堂总部','商业会馆','🏦','刘国钧旧宅，如今的街区总部'],
+    ['banyuan', '半园庄园', '园林庄园','🌸','一半是园、一半让给街坊的宅园'],
+    ['lihetang','礼和堂会所','会所文化','📖','周氏旧宅，三楼是周有光图书馆'],
+    ['finance', '西入口金融中心','金融总部','🏙','整条街的资金流水都从这里过'],
   ];
   const layouts = {
     cafe: { layout_z: -100, side:  1 },
@@ -578,6 +588,16 @@ function _seedShops() {
     wonton: { layout_z: -24, side:  1 },
     teahouse: { layout_z: -42, side: -1 },
     dessert: { layout_z: -58, side:  1 },
+    milktea: { layout_z: -12, side:  1 },
+    chenghuang: { layout_z: -45, side:  1 },
+    memory: { layout_z: -72, side:  1 },
+    songjiantang: { layout_z: -155, side:  1 },
+    zhaoyuanren: { layout_z: -185, side:  1 },
+    yunhongyi: { layout_z: -338, side:  1 },
+    baguitang: { layout_z: -386, side:  1 },
+    banyuan: { layout_z: -413, side:  1 },
+    lihetang: { layout_z: -440, side: -1 },
+    finance: { layout_z: -10, side: -1 },
   };
   // 按 id 补缺：老库已有店铺不会被重复插入，新增店铺也能追加上
   const existing = new Set(query('SELECT id FROM shops').map((r) => r.id));
@@ -600,6 +620,16 @@ function _seedShops() {
     ['wonton', '鲜肉小馄饨', 12, 1], ['wonton', '大排面', 22, 2],
     ['teahouse', '雨前绿茶', 48, 1], ['teahouse', '茶点拼盘', 28, 2],
     ['dessert', '桂花糖芋苗', 15, 1], ['dessert', '藕粉圆子', 18, 2],
+    ['milktea', '黑糖珍珠鲜奶', 15, 1], ['milktea', '桂花乌龙', 12, 2], ['milktea', '芋泥啵啵', 16, 3],
+    ['chenghuang', '戏楼前排票', 180, 1], ['chenghuang', '戏楼后排票', 80, 2], ['chenghuang', '茶水瓜子', 20, 3],
+    ['memory', '记忆馆门票', 20, 1], ['memory', '青果巷导览手册', 35, 2], ['memory', '明信片一套', 25, 3],
+    ['songjiantang', '松健堂香囊', 45, 1], ['songjiantang', '手抄字帖', 68, 2], ['songjiantang', '旧书一册', 120, 3],
+    ['zhaoyuanren', '故居门票', 25, 1], ['zhaoyuanren', '《教我如何不想她》曲谱', 40, 2], ['zhaoyuanren', '黑胶唱片', 260, 3],
+    ['yunhongyi', '可园门票', 30, 1], ['yunhongyi', '园中茶席', 88, 2], ['yunhongyi', '太湖石摆件', 320, 3],
+    ['baguitang', '八桂堂会席', 1200, 1], ['baguitang', '家宴定制', 8800, 2], ['baguitang', '私募份额', 50000, 3],
+    ['banyuan', '半园茶会', 168, 1], ['banyuan', '桂花酿', 98, 2], ['banyuan', '园林写真', 880, 3],
+    ['lihetang', '会所日票', 600, 1], ['lihetang', '图书借阅卡', 200, 2], ['lihetang', '雪茄吧单次', 380, 3],
+    ['finance', '财富管理咨询', 2000, 1], ['finance', '保险箱年租', 1200, 2], ['finance', '街铺贷月供', 5000, 3],
   ];
   const shopsWithProducts = new Set(
     query('SELECT DISTINCT shop_id FROM products').map((r) => r.shop_id)

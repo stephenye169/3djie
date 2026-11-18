@@ -88,6 +88,118 @@ export const SHOP_NPCS = {
       { label: '还有别的吗', reply: '酒酿圆子和藕粉圆子也很受欢迎。' },
       { label: '能带走吗', reply: '可以，打包盒是保温的，回家还是热的。' }
     ]
+  },
+
+  // ===== 可收购资产：店内店员（商品数据为空，点柜台仍是收购/升级面板） =====
+  milktea: {
+    name: '奶茶西施',
+    role: '店长',
+    avatar: '\u{1F9CB}',
+    greeting: '哟，是你啊。珍珠刚煮好，喝什么？先说好，别赊账。',
+    topics: [
+      { label: '招牌是哪杯', reply: '黑糖珍珠鲜奶，一天能卖两百杯。' },
+      { label: '能少糖吗', reply: '可以，但少糖就没那个味了，我劝你别。' },
+      { label: '这店卖不卖', reply: '五十万，一口价。看你这身行头，怕是拿不出来。' }
+    ]
+  },
+  chenghuang: {
+    name: '戏楼班主',
+    role: '班主',
+    avatar: '\u{1F3AD}',
+    greeting: '票买了吗？今儿唱《牡丹亭》，后排还有座。',
+    topics: [
+      { label: '今天唱什么', reply: '《牡丹亭·游园》，头牌上场，锣鼓一响整条巷子都听得见。' },
+      { label: '我能上台吗', reply: '先练三年水袖，再跟我提上台的事。' },
+      { label: '戏楼多少年了', reply: '一百多年，梁上的彩画还是老的。' }
+    ]
+  },
+  memory: {
+    name: '道貌馆长',
+    role: '馆长',
+    avatar: '\u{1F3DB}',
+    greeting: '欢迎参观青果巷文化记忆馆，展品请勿触摸。',
+    topics: [
+      { label: '镇馆之宝', reply: '一方明代青果巷的界碑，巷名就从这儿来的。' },
+      { label: '能拍照吗', reply: '不开闪光灯就行。' },
+      { label: '有讲解吗', reply: '每天两场，上午十点、下午三点，跟着人流走就是。' }
+    ]
+  },
+  songjiantang: {
+    name: '老派掌柜',
+    role: '掌柜',
+    avatar: '\u{1F33F}',
+    greeting: '松健堂的规矩，先坐下喝口茶再说话。',
+    topics: [
+      { label: '堂里做什么', reply: '旧时是书斋，如今收着些字画和旧家具。' },
+      { label: '老宅多少年', reply: '我这辈算第五代，梁柱一根没换过。' },
+      { label: '收徒吗', reply: '收，但得先肯扫三年院子。' }
+    ]
+  },
+  zhaoyuanren: {
+    name: '名门管家',
+    role: '管家',
+    avatar: '\u{1F3BC}',
+    greeting: '赵先生故居，请轻声。琴房的谱子不要动。',
+    topics: [
+      { label: '赵元任是谁', reply: '语言学家、作曲家，《教我如何不想她》就是他谱的曲。' },
+      { label: '那架钢琴', reply: '按原样摆着的，琴键早没人弹了。' },
+      { label: '参观路线', reply: '前厅、琴房、书房，从右手边开始走。' }
+    ]
+  },
+  yunhongyi: {
+    name: '园林主人',
+    role: '园主',
+    avatar: '\u{1F3EF}',
+    greeting: '可园的廊子绕，跟着我走，别迷了。',
+    topics: [
+      { label: '园子多大', reply: '不大，三亩地，走一圈一炷香。' },
+      { label: '那座假山', reply: '太湖石堆的，雨天听水声最好。' },
+      { label: '能办宴吗', reply: '能，水榭摆四桌，多一桌都挤。' }
+    ]
+  },
+  baguitang: {
+    name: '财阀家主',
+    role: '家主',
+    avatar: '\u{1F3E6}',
+    greeting: '八桂堂只谈生意。坐。',
+    topics: [
+      { label: '总部做什么', reply: '这条街的租约、账目、人情，都在这张桌上过。' },
+      { label: '还收并购吗', reply: '收，但我只买能赚钱的，不买情怀。' },
+      { label: '让我入个股', reply: '先拿五亿来，我们再谈。' }
+    ]
+  },
+  banyuan: {
+    name: '世家公子',
+    role: '园主',
+    avatar: '\u{1F338}',
+    greeting: '半园今日不待客——罢了，既然进来了，就看看吧。',
+    topics: [
+      { label: '园名来历', reply: '半园半园，一半是园，一半是给街坊留的路。' },
+      { label: '常办茶会吗', reply: '每月初一，来的都是些老面孔。' },
+      { label: '园里有什么', reply: '一池、一亭、两株老桂，秋天香得整条巷子都知道。' }
+    ]
+  },
+  lihetang: {
+    name: '会长秘书',
+    role: '秘书',
+    avatar: '\u{1F4D6}',
+    greeting: '请出示会员卡。没有？那先登记。',
+    topics: [
+      { label: '入会条件', reply: '名下资产过十亿，再两位会员推荐。' },
+      { label: '会所设施', reply: '茶室、书房、小戏台，三楼是周有光图书馆。' },
+      { label: '今天有活动吗', reply: '晚上有一场闭门分享，名单已经定了。' }
+    ]
+  },
+  finance: {
+    name: '金融大亨',
+    role: '行长',
+    avatar: '\u{1F3D9}',
+    greeting: '西入口的每一笔钱都从我这儿过。说吧，借多少？',
+    topics: [
+      { label: '利率多少', reply: '看人。你这种，月息三分。' },
+      { label: '整条街的资金', reply: '十八家店，流水最后都进这栋楼。' },
+      { label: '有什么可投的', reply: '我不推荐，我只收利息。' }
+    ]
   }
 };
 
