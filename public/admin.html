@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>青果巷 · 管理员后台</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: rgba(20, 30, 48, 0.92);
+      --line: rgba(148, 163, 184, 0.22);
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #f5d0a9;
+      --danger: #fca5a5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--text);
+      background: radial-gradient(1200px 600px at 70% -10%, #1e293b 0%, var(--bg) 60%);
+      padding: 32px 20px 60px;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: 1px; color: var(--accent); }
+    .sub { margin-bottom: 20px; font-size: 12px; color: var(--muted); }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 18px;
+      backdrop-filter: blur(10px);
+    }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%;
+      padding: 9px 11px;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text);
+      background: rgba(11, 18, 32, 0.8);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      outline: none;
+    }
+    textarea { min-height: 84px; resize: vertical; }
+    input:focus, textarea:focus { border-color: rgba(245, 208, 169, 0.6); }
+    button {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-family: inherit;
+      color: #1f2937;
+      background: var(--accent);
+      border: none;
+      border-radius: 9px;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.05); }
+    button.ghost {
+      color: var(--text);
+      background: transparent;
+      border: 1px solid var(--line);
+    }
+    button.ghost.active { color: #1f2937; background: var(--accent); border-color: var(--accent); }
+    button.danger { color: var(--danger); background: transparent; border: 1px solid rgba(248, 113, 113, 0.4); }
+    button.small { padding: 5px 11px; font-size: 12px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row.end { justify-content: flex-end; }
+    .msg { min-height: 18px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+    .msg.err { color: var(--danger); }
+    .list-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .list-head h2 { margin: 0; font-size: 15px; }
+    .item {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      margin-bottom: 10px;
+      background: rgba(11, 18, 32, 0.45);
+    }
+    .item-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .item-title { font-size: 14px; color: var(--accent); }
+    .badge { font-size: 10px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted); }
+    .badge.on { color: #34d399; border-color: rgba(52, 211, 153, 0.4); }
+    .badge.banned { color: #f87171; border-color: rgba(248, 113, 113, 0.5); }
+    .item-content { margin: 8px 0; font-size: 12px; line-height: 1.7; color: #cbd5e1; white-space: pre-wrap; }
+    .item-meta { font-size: 11px; color: #64748b; margin-bottom: 10px; }
+    .item-actions { display: flex; gap: 8px; }
+    .hidden { display: none !important; }
+    .empty { color: var(--muted); font-size: 12px; padding: 10px 0; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+
+    /* 用户表格 */
+    table.users {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table.users th, table.users td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+    }
+    table.users th {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    table.users td.id { font-family: ui-monospace, monospace; font-size: 11px; color: #64748b; }
+    table.users td.actions { white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>青果巷 · 管理员后台</h1>
+    <div class="sub">默认账号 admin / admin123。可通过 ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_USERS 覆盖。</div>
+
+    <!-- 登录 -->
+    <div id="login-card" class="card">
+      <div class="row" style="gap:14px; align-items:flex-end;">
+        <div style="flex:1; min-width:180px;">
+          <label for="username">管理员账号</label>
+          <input id="username" type="text" autocomplete="username" placeholder="admin" />
+        </div>
+        <div style="flex:1; min-width:180px;">
+          <label for="password">密码</label>
+          <input id="password" type="password" autocomplete="current-password" placeholder="默认 admin123" />
+        </div>
+        <button id="login-btn">登录</button>
+      </div>
+      <div id="login-msg" class="msg"></div>
+    </div>
+
+    <!-- 主体 -->
+    <div id="main" class="hidden">
+      <div class="card">
+        <div class="row end" style="justify-content:space-between; margin-bottom: 12px;">
+          <div class="tabs">
+            <button class="ghost active" data-tab="users">用户管理</button>
+            <button class="ghost" data-tab="announcements">系统公告</button>
+          </div>
+          <button id="logout-btn" class="ghost small">退出登录</button>
+        </div>
+
+        <!-- 用户管理 -->
+        <section id="section-users">
+          <div class="list-head">
+            <h2>用户列表（禁止聊天 = 既不能发也不能收）</h2>
+            <button id="refresh-users" class="ghost small">刷新</button>
+          </div>
+          <div id="users-box"></div>
+          <div id="users-msg" class="msg"></div>
+        </section>
+
+        <!-- 公告管理 -->
+        <section id="section-announcements" class="hidden">
+          <div class="list-head">
+            <h2 id="form-title">新建公告</h2>
+          </div>
+          <label for="title">标题（最多 60 字）</label>
+          <input id="title" type="text" maxlength="60" placeholder="例如：周末活动公告" />
+          <label for="content">内容（最多 1000 字）</label>
+          <textarea id="content" maxlength="1000" placeholder="公告正文…"></textarea>
+          <div class="row end" style="margin-top:12px;">
+            <button id="cancel-btn" class="ghost hidden">取消编辑</button>
+            <button id="save-btn">发布公告</button>
+          </div>
+          <div id="form-msg" class="msg"></div>
+
+          <div class="list-head" style="margin-top: 28px;">
+            <h2>全部公告</h2>
+            <button id="refresh-btn" class="ghost small">刷新</button>
+          </div>
+          <div id="list"></div>
+          <div id="list-msg" class="msg"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN_KEY = 'qingguo_admin_token';
+    const $ = (id) => document.getElementById(id);
+    let editingId = null;
+    let currentTab = 'users';
+    let usersCache = [];
+    let announcementsCache = [];
+
+    const getToken = () => localStorage.getItem(TOKEN_KEY);
+    const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
+
+    function setMsg(el, text, isErr = false) {
+      const node = $(el);
+      node.textContent = text || '';
+      node.className = 'msg' + (isErr ? ' err' : '');
+    }
+
+    async function api(path, options = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      const token = getToken();
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(path, { ...options, headers });
+      let data = null;
+      try { data = await res.json(); } catch { /* 空响应 */ }
+      if (!res.ok) {
+        const err = new Error((data && data.error) || ('请求失败 ' + res.status));
+        err.status = res.status;
+        throw err;
+      }
+      return data;
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return '';
+      return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    // ============ Tab 切换 ============
+    document.querySelectorAll('[data-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('[data-tab]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.tab === tab);
+      });
+      $('section-users').classList.toggle('hidden', tab !== 'users');
+      $('section-announcements').classList.toggle('hidden', tab !== 'announcements');
+      if (tab === 'users') loadUsers();
+      else loadAnnouncements();
+    }
+
+    // ============ 用户管理 ============
+    async function loadUsers() {
+      setMsg('users-msg', '加载中…');
+      try {
+        const items = await api('/api/admin/users');
+        usersCache = items;
+        renderUsers(items);
+        setMsg('users-msg', '共 ' + items.length + ' 位用户');
+      } catch (e) {
+        if (e.status === 401 || e.status === 403) { setToken(null); showLogin('登录状态失效，请重新登录'); return; }
+        setMsg('users-msg', e.message, true);
+      }
+    }
+
+    function renderUsers(items) {
+      const box = $('users-box');
+      if (!items.length) { box.innerHTML = '<div class="empty">还没有注册用户</div>'; return; }
+      const rows = items.map((u) => `
+        <tr>
+          <td class="id">${escapeHtml(u.id)}</td>
+          <td>${escapeHtml(u.nickname)}<div style="font-size:11px;color:#64748b;">@${escapeHtml(u.username)}</div></td>
+          <td>${u.variant === 'female' ? '小果' : '阿青'}</td>
+          <td>¥${u.balance ?? 0}</td>
+          <td>${u.chat_banned
+            ? '<span class="badge banned">已禁止聊天</span>'
+            : '<span class="badge on">正常</span>'}</td>
+          <td class="actions">
+            ${u.chat_banned
+              ? `<button class="ghost small" data-act="unban" data-id="${u.id}">解除禁止</button>`
+              : `<button class="danger small" data-act="ban" data-id="${u.id}">禁止聊天</button>`}
+          </td>
+        </tr>
+      `).join('');
+      box.innerHTML = `
+        <table class="users">
+          <thead><tr>
+            <th>ID</th><th>昵称</th><th>角色</th><th>余额</th><th>聊天状态</th><th>操作</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    $('refresh-users').addEventListener('click', loadUsers);
+
+    $('users-box').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const act = btn.dataset.act;
+      try {
+        await api(`/api/admin/users/${id}/${act}`, { method: 'POST' });
+        loadUsers();
+      } catch (err) {
+        if (err.status === 401 || err.status === 403) { setToken(null); showLogin('登录状态失效，请重新登录'); return; }
+        setMsg('users-msg', err.message, true);
+      }
+    });
+
+    // ============ 公告管理 ============
+    function renderAnnouncements(items) {
+      announcementsCache = items;
+      const box = $('list');
+      if (!items.length) { box.innerHTML = '<div class="empty">还没有公告</div>'; return; }
+      box.innerHTML = items.map((a) => `
+        <div class="item">
+          <div class="item-top">
+            <span class="item-title">${escapeHtml(a.title)}</span>
+            <span class="badge ${a.active ? 'on' : ''}">${a.active ? '启用中' : '已停用'}</span>
+          </div>
+          <div class="item-content">${escapeHtml(a.content)}</div>
+          <div class="item-meta">更新于 ${fmtTime(a.updated_at)}</div>
+          <div class="item-actions">
+            <button class="ghost small" data-act="edit" data-id="${a.id}">编辑</button>
+            <button class="ghost small" data-act="toggle" data-id="${a.id}" data-active="${a.active}">${a.active ? '停用' : '启用'}</button>
+            <button class="danger small" data-act="delete" data-id="${a.id}">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function loadAnnouncements() {
+      setMsg('list-msg', '加载中…');
+      try {
+        const items = await api('/api/admin/announcements');
+        renderAnnouncements(items);
+        setMsg('list-msg', '共 ' + items.length + ' 条');
+      } catch (e) {
+        if (e.status === 401 || e.status === 403) { setToken(null); showLogin('登录状态失效，请重新登录'); return; }
+        setMsg('list-msg', e.message, true);
+      }
+    }
+
+    function resetForm() {
+      editingId = null;
+      $('title').value = '';
+      $('content').value = '';
+      $('form-title').textContent = '新建公告';
+      $('save-btn').textContent = '发布公告';
+      $('cancel-btn').classList.add('hidden');
+      setMsg('form-msg', '');
+    }
+
+    function startEdit(a) {
+      editingId = a.id;
+      $('title').value = a.title;
+      $('content').value = a.content;
+      $('form-title').textContent = '编辑公告';
+      $('save-btn').textContent = '保存修改';
+      $('cancel-btn').classList.remove('hidden');
+      setMsg('form-msg', '');
+    }
+
+    $('refresh-btn').addEventListener('click', loadAnnouncements);
+    $('cancel-btn').addEventListener('click', resetForm);
+
+    $('save-btn').addEventListener('click', async () => {
+      const title = $('title').value.trim();
+      const content = $('content').value.trim();
+      if (!title || !content) return setMsg('form-msg', '标题和内容都不能为空', true);
+      setMsg('form-msg', '保存中…');
+      try {
+        if (editingId) {
+          await api('/api/admin/announcements/' + editingId, { method: 'PUT', body: JSON.stringify({ title, content }) });
+        } else {
+          await api('/api/admin/announcements', { method: 'POST', body: JSON.stringify({ title, content, active: 1 }) });
+        }
+        resetForm();
+        setMsg('form-msg', '已保存');
+        loadAnnouncements();
+      } catch (e) {
+        if (e.status === 401 || e.status === 403) { setToken(null); showLogin('登录状态失效，请重新登录'); return; }
+        setMsg('form-msg', e.message, true);
+      }
+    });
+
+    $('list').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const act = btn.dataset.act;
+      const item = announcementsCache.find((a) => a.id === id);
+      if (!item) return;
+
+      if (act === 'edit') return startEdit(item);
+      try {
+        if (act === 'toggle') {
+          await api('/api/admin/announcements/' + id, { method: 'PUT', body: JSON.stringify({ active: item.active ? 0 : 1 }) });
+        } else if (act === 'delete') {
+          if (!confirm('确定删除公告「' + item.title + '」？')) return;
+          await api('/api/admin/announcements/' + id, { method: 'DELETE' });
+        }
+        loadAnnouncements();
+      } catch (err) {
+        if (err.status === 401 || err.status === 403) { setToken(null); showLogin('登录状态失效，请重新登录'); return; }
+        setMsg('list-msg', err.message, true);
+      }
+    });
+
+    // ============ 登录 ============
+    $('login-btn').addEventListener('click', async () => {
+      const username = $('username').value.trim();
+      const password = $('password').value;
+      if (!username || !password) return setMsg('login-msg', '请输入账号和密码', true);
+      setMsg('login-msg', '登录中…');
+      try {
+        const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+        setToken(data.token);
+        // 用管理员接口校验权限
+        try { await api('/api/admin/users'); }
+        catch (e) { setToken(null); throw new Error(e.status === 403 ? '该账号没有管理员权限' : e.message); }
+        showMain();
+      } catch (e) {
+        setMsg('login-msg', e.message, true);
+      }
+    });
+
+    $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('login-btn').click(); });
+    $('logout-btn').addEventListener('click', () => { setToken(null); showLogin('已退出登录'); });
+
+    function showLogin(msg) {
+      $('login-card').classList.remove('hidden');
+      $('main').classList.add('hidden');
+      setMsg('login-msg', msg || '', !!msg);
+    }
+    function showMain() {
+      $('login-card').classList.add('hidden');
+      $('main').classList.remove('hidden');
+      resetForm();
+      switchTab('users');
+    }
+
+    // 启动：有 token 直接进主界面
+    if (getToken()) {
+      api('/api/admin/users')
+        .then(showMain)
+        .catch((e) => {
+          setToken(null);
+          showLogin(e.status === 403 ? '该账号没有管理员权限' : '请先登录');
+        });
+    } else {
+      showLogin();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D 街道漫游</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <!-- 加载界面 -->
+  <div id="loading-screen" class="overlay">
+    <div class="loading-box">
+      <div class="loading-title">正在加载 3D 场景…</div>
+      <div class="loading-bar-wrap">
+        <div id="loading-bar" class="loading-bar"></div>
+      </div>
+      <div id="loading-percent" class="loading-percent">0%</div>
+      <div id="loading-status" class="loading-status">初始化中…</div>
+      <button id="retry-btn" class="retry-btn hidden">重新加载</button>
+    </div>
+  </div>
+
+  <!-- 错误提示 -->
+  <div id="error-toast" class="error-toast hidden"></div>
+
+  <!-- 角色选择 -->
+  <div id="char-select" class="char-select hidden">
+    <div class="char-panel">
+      <h2 class="char-title">选择你的角色</h2>
+      <p class="char-sub">青果巷 · 历史街区漫游</p>
+      <div class="char-cards">
+        <button class="char-card active" data-variant="male" data-name="阿青">
+          <span class="char-emoji">🧑🏻</span>
+          <span class="char-name">阿青</span>
+          <span class="char-desc">男生 · 蓝衬衫短发（默认）</span>
+        </button>
+        <button class="char-card" data-variant="female" data-name="小果">
+          <span class="char-emoji">👧🏻</span>
+          <span class="char-name">小果</span>
+          <span class="char-desc">女生 · 红裙马尾辫</span>
+        </button>
+      </div>
+      <label class="char-nick">
+        <span>昵称</span>
+        <input id="char-name-input" maxlength="16" placeholder="留空则用角色名" />
+        <button id="char-reroll" type="button" class="char-reroll" title="随机一个昵称">🎲</button>
+      </label>
+      <p class="char-tip">昵称已随机生成（自动带今天日期，如 1111），点 🎲 换一个；点击角色卡片开始游览</p>
+    </div>
+  </div>
+
+  <!-- 通用提示 -->
+  <div id="ui-toast" class="ui-toast hidden"></div>
+
+  <!-- 个人中心 / 钱包 -->
+  <div id="wallet-panel" class="wallet-panel hidden">
+    <div class="wallet-modal">
+      <button id="wallet-close" class="wallet-close" title="关闭">×</button>
+      <div class="wallet-title">个人中心</div>
+      <div id="wallet-panel-balance" class="wallet-balance-big">¥500</div>
+      <div id="wallet-panel-spent" class="wallet-spent">已消费 ¥0</div>
+
+      <div class="wallet-section-label">快捷充值</div>
+      <div class="wallet-actions">
+        <button class="wallet-action" data-recharge="100">+ ¥100</button>
+        <button class="wallet-action" data-recharge="500">+ ¥500</button>
+        <button id="wallet-reset" class="wallet-action ghost">重置为 ¥500</button>
+      </div>
+
+      <div class="wallet-section-label">已购商品</div>
+      <div id="wallet-panel-list" class="wallet-list"></div>
+    </div>
+  </div>
+
+  <!-- 顶部导航栏 -->
+  <header class="topnav">
+    <div class="brand">
+      <div class="brand-mark">青</div>
+      <div class="brand-text">
+        <div class="brand-title">青果巷</div>
+        <div class="brand-sub">VIRTUAL STREET</div>
+      </div>
+    </div>
+    <nav class="nav-links">
+      <button class="nav-link active" data-nav="guide">街区导览</button>
+      <button class="nav-link" data-nav="join">商家入驻</button>
+      <button class="nav-link" data-nav="about">关于我们</button>
+    </nav>
+    <div class="nav-right">
+      <div id="leaderboard-chip" class="leaderboard-chip hidden" title="全服首富榜">
+        <span class="leaderboard-icon">🏆</span>
+        <span id="leaderboard-text" class="leaderboard-text">首富榜加载中…</span>
+      </div>
+      <div class="online-chip" id="online-chip" title="当前在线人数">
+        <span class="online-live-dot"></span>
+        <span id="online-count">0</span>&nbsp;人在线
+      </div>
+      <div class="room-chip hidden" id="room-chip" title="点击查看全部房间">
+        <span class="room-emoji">🏠</span>
+        <b id="room-id">1</b><span class="room-unit">号房</span>
+        <span class="room-sep">·</span>
+        <span class="room-count"><span id="room-count">0</span>/30</span>
+        <div id="room-pop" class="room-pop hidden">
+          <div class="room-pop-title">选择房间 <span id="room-pop-total" class="room-pop-total"></span></div>
+          <div id="room-pop-list" class="room-pop-list"></div>
+          <div class="room-pop-tip">满员的房间不可选 · 选房后会记住你的选择</div>
+        </div>
+      </div>
+      <div class="wallet-chip" id="wallet-chip" title="我的余额">
+        <span class="wallet-icon">💰</span>
+        <span id="wallet-balance">¥500</span>
+      </div>
+      <button id="exit-game" class="exit-btn-top" title="退出游戏">退出</button>
+      <div class="nav-badge">DEMO</div>
+    </div>
+      <div class="online-chip" id="online-chip" title="当前在线人数">
+        <span class="online-live-dot"></span>
+        <span id="online-count">0</span>&nbsp;人在线
+      </div>
+      <div class="wallet-chip" id="wallet-chip" title="我的余额">
+        <span class="wallet-icon">💰</span>
+        <span id="wallet-balance">¥500</span>
+      </div>
+      <button class="notify-chip" id="notify-chip" title="切到后台时，店铺被踢馆会弹系统通知（点击开启）">
+        <span class="notify-icon">🔔</span>
+        <span id="notify-label">护盘提醒</span>
+      </button>
+      <button id="exit-game" class="exit-btn-top" title="退出游戏">退出</button>
+      <div class="nav-badge">DEMO</div>
+    </div>
+  </header>
+
+  <!-- 系统公告（顶栏公告条） -->
+  <div id="notice-bar" class="notice-bar hidden">
+    <span class="notice-icon">📢</span>
+    <span id="notice-text" class="notice-text"></span>
+    <span id="notice-index" class="notice-index hidden"></span>
+    <button id="notice-close" class="notice-close" title="关闭公告">×</button>
+  </div>
+
+  <!-- 退出确认 -->
+  <div id="exit-modal" class="exit-modal hidden">
+    <div class="exit-panel">
+      <div class="exit-icon">🚪</div>
+      <h2 class="exit-title">退出游戏？</h2>
+      <p class="exit-desc">退出后将结束当前游览，可随时重新进入。</p>
+      <div class="exit-actions">
+        <button id="exit-cancel" class="exit-action ghost">继续游览</button>
+        <button id="exit-confirm" class="exit-action danger">确认退出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 已退出 -->
+  <div id="exit-screen" class="exit-screen hidden">
+    <div class="exit-screen-inner">
+      <div class="exit-brand">青</div>
+      <h1 class="exit-screen-title">已退出游览</h1>
+      <p class="exit-screen-desc">感谢游览青果巷 · 3D 虚拟商业街</p>
+      <div class="exit-actions">
+        <button id="exit-reenter" class="exit-action">重新进入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 左侧信息区 -->
+  <aside class="left-panel">
+    <!-- 资产 HUD -->
+    <div id="biz-hud" class="biz-hud hidden">
+      <div class="biz-top">
+        <span id="biz-title" class="biz-title">街头路人甲</span>
+        <span id="biz-owned" class="biz-owned">0 / —</span>
+      </div>
+      <div id="biz-balance" class="biz-balance">¥0</div>
+      <div class="biz-bottom">
+        <span id="biz-rate" class="biz-rate">+0 / 秒</span>
+        <span id="biz-next" class="biz-next"></span>
+      </div>
+    </div>
+    <div class="panel-block">
+      <div class="panel-label">当前位置</div>
+      <div class="panel-location" id="panel-location">青果巷 · 历史街区</div>
+    </div>
+    <div class="panel-block dividend-block">
+      <div class="panel-label">家族分红</div>
+      <button id="dividend-claim" class="dividend-claim" type="button">
+        <span id="dividend-amount" class="dividend-amount">¥0</span>
+        <span id="dividend-tip" class="dividend-tip">挂机自动累积 · 点击一键领取</span>
+      </button>
+    </div>
+    <div class="panel-block quest-block">
+      <div class="panel-label">商业任务</div>
+      <div id="quest-list" class="quest-list"></div>
+      <div id="quest-tip" class="quest-tip">加载中…</div>
+    </div>
+    <div class="panel-block">
+      <div class="panel-label">街区商家 <span id="shop-count" class="panel-count">—</span></div>
+      <div id="shop-list" class="shop-list"></div>
+    </div>
+    <div class="panel-block">
+      <div class="panel-label">探索进度</div>
+      <div class="panel-progress">
+        <span id="explore-count">0</span> / <span id="explore-total">—</span> 家已探索
+      </div>
+    </div>
+  </aside>
+
+  <!-- 底部控制区 -->
+  <footer class="bottombar">
+    <div class="controls">
+      <span class="ctrl"><b>W A S D</b> 移动</span>
+      <span class="ctrl"><b>鼠标</b> 视角</span>
+      <span class="ctrl"><b>Shift</b> 奔跑</span>
+      <span class="ctrl"><b>E</b> 互动</span>
+      <span class="ctrl"><b>M</b> 地图</span>
+      <span class="ctrl"><b>T</b> 轮回</span>
+      <span class="ctrl"><b>Tab</b> 聊天<b id="chat-unread" class="chat-unread hidden"></b></span>
+      <span class="ctrl"><b>Esc</b> 关闭</span>
+    </div>
+    <div id="player-state" class="player-state" data-state="idle">静止</div>
+  </footer>
+
+  <!-- 靠近店铺交互提示 -->
+  <div id="interact-hint" class="interact-hint hidden">
+    <div class="interact-key">E</div>
+    <div class="interact-text">
+      <div class="interact-shop">进入 <span id="interact-shop-name">店铺</span></div>
+      <div class="interact-distance" id="interact-distance"></div>
+    </div>
+  </div>
+
+  <!-- 资产 HUD 已移入左侧信息区（见 aside.left-panel 顶部） -->
+
+  <!-- 全服战报弹幕 -->
+  <div id="danmaku-layer" class="danmaku-layer"></div>
+
+  <!-- 资本危机警报：别人踢馆时 15 秒倒计时护盘 -->
+  <div id="attack-alert" class="attack-alert hidden">
+    <div class="attack-alert-box">
+      <div class="attack-hazard"></div>
+      <div class="attack-stamp">⚡ 资本危机警告 ⚡</div>
+
+      <div class="attack-vs">
+        <div class="attack-side enemy">
+          <div class="attack-avatar">🕴</div>
+          <div id="attack-attacker" class="attack-name">竞争对手</div>
+          <div class="attack-role">恶意收购方</div>
+        </div>
+        <div class="attack-vs-mark">VS</div>
+        <div class="attack-side mine">
+          <div id="attack-shop-emoji" class="attack-avatar">🏪</div>
+          <div id="attack-shop" class="attack-name">你的资产</div>
+          <div class="attack-role">核心资产</div>
+        </div>
+      </div>
+
+      <p id="attack-text" class="attack-text"></p>
+
+      <div class="attack-money">
+        <div class="attack-money-item"><span>对方出价</span><b id="attack-bid">—</b></div>
+        <div class="attack-money-item"><span>护盘价</span><b id="attack-cost">—</b></div>
+      </div>
+
+      <div class="attack-countdown-wrap">
+        <svg class="attack-ring" viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="attack-ring-bg" cx="60" cy="60" r="54"></circle>
+          <circle id="attack-ring-fg" class="attack-ring-fg" cx="60" cy="60" r="54"></circle>
+        </svg>
+        <div id="attack-countdown" class="attack-countdown">15</div>
+        <div class="attack-countdown-label">秒后资产易主</div>
+      </div>
+
+      <!-- 防守方还价区（每场一次，1.2–2.0 倍区间由服务端约束） -->
+      <div id="attack-counter" class="attack-counter">
+        <button id="counter-toggle" class="attack-counter-toggle" type="button">💬 讨价还价（每场一次）</button>
+        <div id="counter-panel" class="counter-panel hidden">
+          <input id="counter-slider" class="counter-slider" type="range" min="0" max="0" step="1" value="0">
+          <div class="counter-price">开价 <b id="counter-price">—</b>（<span id="counter-ratio">—</span> 倍）</div>
+          <button id="counter-submit" class="counter-submit" type="button">提出还价，等对方应价</button>
+        </div>
+      </div>
+
+      <!-- 攻击方视角：对方的还价请求（counter_pending 时显示） -->
+      <div id="attack-counter-info" class="attack-counter-info hidden"></div>
+
+      <div class="attack-actions">
+        <button id="attack-defend" class="attack-defend">
+          强力护盘
+          <small id="attack-defend-price">—</small>
+        </button>
+        <button id="attack-giveup" class="attack-giveup">认栽离场</button>
+      </div>
+      <div id="attack-hint" class="attack-hint"></div>
+      <div id="attack-error" class="attack-error"></div>
+
+      <div id="attack-verdict" class="attack-verdict"></div>
+      <div class="attack-hazard"></div>
+    </div>
+  </div>
+
+  <!-- 碰瓷 NPC：角落里的势利眼，走近触发打脸对话 -->
+  <div id="taunt-panel" class="taunt-panel hidden">
+    <div class="taunt-box">
+      <button id="taunt-close" class="taunt-close" title="离开">×</button>
+      <div class="taunt-head">
+        <div id="taunt-avatar" class="taunt-avatar">🕶</div>
+        <div class="taunt-who">
+          <strong id="taunt-name">势利眼富二代</strong>
+          <span id="taunt-place" class="taunt-place">城隍庙戏楼后巷</span>
+        </div>
+        <div id="taunt-reward" class="taunt-reward">+¥2000万</div>
+      </div>
+      <p id="taunt-text" class="taunt-text"></p>
+      <div id="taunt-result" class="taunt-result"></div>
+      <div class="taunt-actions">
+        <button id="taunt-bully" class="taunt-bully" type="button">用钞能力当场羞辱他</button>
+        <button id="taunt-leave" class="taunt-leave" type="button">懒得理他</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 店铺信息卡片 -->
+  <div id="asset-card" class="asset-card hidden">
+    <button id="asset-close" class="asset-close" title="关闭">×</button>
+    <div class="asset-head">
+      <div id="asset-emoji" class="asset-emoji">🏪</div>
+      <div class="asset-headtext">
+        <div id="asset-tier" class="asset-tier">第一幕 · 初露锋芒</div>
+        <h2 id="asset-name" class="asset-name">资产名称</h2>
+        <div id="asset-status" class="asset-status" data-owned="0">待收购</div>
+      </div>
+    </div>
+    <p id="asset-taunt" class="asset-taunt"></p>
+    <div class="asset-stats">
+      <div class="asset-stat"><span>收购价</span><b id="asset-price">—</b></div>
+      <div class="asset-stat"><span>每秒收租</span><b id="asset-income">—</b></div>
+      <div class="asset-stat"><span>装修等级</span><b id="asset-level">—</b></div>
+    </div>
+    <div id="asset-econ" class="asset-econ hidden"></div>
+    <div id="asset-message" class="asset-message"></div>
+    <div id="asset-cooldown" class="asset-cooldown hidden">
+      <div class="asset-cooldown-ring-wrap">
+        <svg class="asset-cooldown-svg" viewBox="0 0 48 48">
+          <circle class="asset-cooldown-track" cx="24" cy="24" r="20" />
+          <circle id="asset-cooldown-bar" class="asset-cooldown-bar" cx="24" cy="24" r="20" />
+        </svg>
+        <div id="asset-cooldown-count" class="asset-cooldown-count">4:59</div>
+      </div>
+      <div class="asset-cooldown-tip">🛡 店铺正在保护期内，5 分钟内无法再次发起踢馆</div>
+    </div>
+    <button id="asset-action" class="asset-action">甩出黑卡收购</button>
+    <div id="asset-hint" class="asset-hint hidden">走到门口光圈，按 E 进入店铺</div>
+  </div>
+
+  <!-- 店员对话面板 -->
+  <div id="dialogue-panel" class="dialogue-panel hidden">
+    <button id="dialogue-close" class="dialogue-close" title="结束交谈">×</button>
+    <div class="dialogue-head">
+      <div id="dialogue-avatar" class="dialogue-avatar">🙂</div>
+      <div class="dialogue-who">
+        <strong id="dialogue-name">店员</strong>
+        <span id="dialogue-role">店员</span>
+      </div>
+    </div>
+    <p id="dialogue-text" class="dialogue-text">你好。</p>
+    <div id="dialogue-options" class="dialogue-options"></div>
+    <div class="dialogue-tip">点击回复选项继续交谈 · Esc 结束</div>
+  </div>
+
+  <!-- 场景切换遮罩 -->
+  <div id="scene-fade" class="scene-fade"></div>
+
+  <!-- 店内离开按钮 -->
+  <button id="exit-shop" class="exit-shop hidden">离开店铺</button>
+
+  <!-- 资本轮回面板（T 开关）：1 万亿身价清零重生换黑卡 + 永久天赋树 -->
+  <div id="prestige-panel" class="prestige-panel hidden">
+    <div class="prestige-box">
+      <button id="prestige-close" class="prestige-close" title="关闭">×</button>
+      <div class="prestige-head">
+        <div class="prestige-title">🃏 资本轮回</div>
+        <div class="prestige-stats">
+          <span>第 <b id="prestige-count">0</b> 轮</span>
+          <span class="prestige-points-chip">🃏 <b id="prestige-points">0</b> 张黑卡</span>
+        </div>
+      </div>
+
+      <div class="prestige-reset">
+        <div class="prestige-reset-label">
+          总身价 <b id="prestige-value">¥0</b><span class="prestige-threshold">/ 门槛 1万亿</span>
+        </div>
+        <div class="prestige-bar">
+          <div id="prestige-bar-fill" class="prestige-bar-fill"></div>
+          <div id="prestige-bar-pct" class="prestige-bar-pct">0%</div>
+        </div>
+        <div id="prestige-preview" class="prestige-preview">收购店铺并升级装修，把总身价堆到 1 万亿</div>
+        <button id="prestige-btn" class="prestige-btn" disabled>身价未达 1 万亿 · 继续收租</button>
+        <div id="prestige-confirm" class="prestige-confirm hidden">
+          <span class="prestige-confirm-text">
+            清零全部现金与店铺，换 <b id="prestige-confirm-points">0</b> 张传世黑卡？<b>不可撤销！</b>
+          </span>
+          <div class="prestige-confirm-actions">
+            <button id="prestige-confirm-yes" class="prestige-confirm-yes">确认轮回</button>
+            <button id="prestige-confirm-no" class="prestige-confirm-no">再想想</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="prestige-talents-label">永久天赋 · 黑卡点亮（轮回不清除）</div>
+      <div id="talent-list" class="talent-list"></div>
+      <div id="prestige-tip" class="prestige-tip">天赋永久生效 · 任务进度与拾取冷却不受轮回影响 · 资本压制不影响踢馆出价</div>
+    </div>
+  </div>
+
+  <!-- 街区众筹扩建面板：项目列表 + 入股 + 我的股份与分红 -->
+  <div id="crowd-panel" class="crowd-panel hidden">
+    <div class="crowd-box">
+      <button id="crowd-close" class="crowd-close" title="关闭">×</button>
+      <div class="crowd-title">📋 街区众筹扩建</div>
+      <div class="crowd-hint">对黄金店铺发起众筹：玩家入股扩建（店铺升级 +1），租金收益的 40% 按股份比例长期分红 · 股份不可转让 · 店铺易主时按 90% 退款解散</div>
+      <div id="crowd-projects" class="crowd-projects"></div>
+      <div class="crowd-mine-label">我的股份与分红</div>
+      <div id="crowd-mine" class="crowd-mine"></div>
+    </div>
+  </div>
+
+  <!-- 聊天面板（Tab 开关）：点击在线玩家私聊，可拉黑 -->
+  <div id="chat-panel" class="chat-panel hidden">
+    <div class="chat-head">
+      <span class="chat-title">聊天</span>
+      <span class="chat-shortcut">Tab 关闭 · Enter 发送</span>
+    </div>
+    <div class="chat-tabs">
+      <button id="chat-tab-global" class="chat-tab active" type="button">🌐 广场</button>
+      <button id="chat-tab-dm" class="chat-tab" type="button">💬 私聊</button>
+    </div>
+    <div class="chat-online-label">在线玩家（点击私聊 / 👤 看资料）</div>
+    <div id="chat-online" class="chat-online"></div>
+    <div id="chat-peer-name" class="chat-peer-name">走近其他玩家并点击对方，开始私聊</div>
+    <div id="chat-messages" class="chat-messages"></div>
+    <textarea id="chat-input" class="chat-input" rows="1" maxlength="500"
+      placeholder="对全服发言…（Enter 发送，Shift+Enter 换行）"></textarea>
+  </div>
+
+  <!-- 玩家资料卡（GDD §5.3 玩家资料查看） -->
+  <div id="profile-panel" class="profile-panel hidden">
+    <div class="profile-box">
+      <button id="profile-close" class="profile-close" title="关闭">×</button>
+      <div class="profile-head">
+        <div id="profile-avatar" class="profile-avatar">🕴</div>
+        <div>
+          <div id="profile-nick" class="profile-nick">—</div>
+          <div id="profile-title" class="profile-title-tag">—</div>
+        </div>
+      </div>
+      <div class="profile-stats">
+        <div class="profile-stat"><span>店铺总身价</span><b id="profile-value">—</b></div>
+        <div class="profile-stat"><span>累计总收益</span><b id="profile-earned">—</b></div>
+        <div class="profile-stat"><span>每秒收租</span><b id="profile-income">—</b></div>
+        <div class="profile-stat"><span>资本轮回</span><b id="profile-rebirth">—</b></div>
+      </div>
+      <div class="profile-shops-label">名下店铺</div>
+      <div id="profile-shops" class="profile-shops"></div>
+    </div>
+  </div>
+
+  <!-- 准星 -->
+  <div id="crosshair" class="crosshair"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
