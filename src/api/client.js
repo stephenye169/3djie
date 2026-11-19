@@ -3,23 +3,68 @@
  *
  * - HTTP fetch：自动带 Bearer token，错误统一抛并 toast
  * - WebSocket 聊天客户端：鉴权握手 + 位置广播 + 消息监听
- * - token 存在 sessionStorage（key=qingguo_token）：
- *   每个标签页就是一个独立客户端，可各自注册并选择不同角色；
- *   刷新页面仍保持登录，关闭标签页后下次重新选角色
+ * - token 与账号凭据存在 localStorage（key=qingguo_token / qingguo_account）：
+ *   关闭浏览器后再进来仍是同一个账号，服务端按账号取回余额、店铺与背包；
+ *   需要另开一个独立玩家时访问 ?fresh（或复制标签页后加 ?fresh）
  */
 
 const API_BASE = ''; // Vite dev proxy 会把 /api /chat 转到 3001；生产同域也直接用相对路径
 const WS_PATH = '/chat';
 const TOKEN_KEY = 'qingguo_token';
+const ACCOUNT_KEY = 'qingguo_account'; // { username, password }：token 过期后自动重新登录用
 
-// ============ Token 管理 ============
+// ============ 身份持久化 ============
+
+function readStore(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function writeStore(key, value) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch { /* 隐私模式等禁用存储：降级为不持久化，不影响本次游戏 */ }
+}
 
 export function getToken() {
-  return sessionStorage.getItem(TOKEN_KEY);
+  const stored = readStore(TOKEN_KEY);
+  if (stored) return stored;
+  // 兼容旧版 sessionStorage 令牌：迁移一次，避免老玩家的已有会话丢失
+  try {
+    const legacy = sessionStorage.getItem(TOKEN_KEY);
+    if (legacy) {
+      writeStore(TOKEN_KEY, legacy);
+      sessionStorage.removeItem(TOKEN_KEY);
+      return legacy;
+    }
+  } catch { /* 忽略 */ }
+  return null;
 }
 export function setToken(t) {
-  if (t) sessionStorage.setItem(TOKEN_KEY, t);
-  else sessionStorage.removeItem(TOKEN_KEY);
+  writeStore(TOKEN_KEY, t || null);
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* 忽略 */ }
+}
+
+/** 已保存的账号凭据（token 过期或缺失时用账号密码自动重新登录） */
+export function getSavedAccount() {
+  const raw = readStore(ACCOUNT_KEY);
+  if (!raw) return null;
+  try {
+    const acc = JSON.parse(raw);
+    return acc?.username && acc?.password ? acc : null;
+  } catch { return null; }
+}
+
+export function saveAccount(account) {
+  writeStore(
+    ACCOUNT_KEY,
+    account ? JSON.stringify({ username: account.username, password: account.password }) : null
+  );
+}
+
+/** 切换玩家（?fresh）：清掉持久化的令牌与账号凭据 */
+export function clearAccount() {
+  setToken(null);
+  saveAccount(null);
 }
 
 // ============ 房间选择（多房间分流，README 11.5） ============
@@ -170,6 +215,8 @@ export const api = {
   resell: (product_id, qty = 1) => http('POST', '/api/orders/resell', { product_id, qty }),
   // 使用功能商品（boost 专用）：消耗 1 件激活 buff
   useInventory: (product_id) => http('POST', '/api/inventory/use', { product_id }),
+  // 体能上报（客户端本地权威，服务端限幅校验）
+  reportStamina: (value) => http('POST', '/api/game/stamina', { value }),
   // 店铺消费流水与档位（进度条展示）
   shopFlow: (shopId) => http('GET', `/api/shops/${shopId}/flow`),
   // 达流水档位的店铺列表（客源金币刷新点）
@@ -333,8 +380,13 @@ export function createChatClient() {
     setTimeout(connect, 200);
   }
 
-  function sendPosition(x, z, yaw = 0) {
-    posPayload = { x, z, yaw };
+  /**
+   * 位置上报。meta 携带场景归属与动作状态：
+   *   { scene: 'street' | 'interior', shopId, moving, sprinting }
+   * 服务端原样转发给同房间其他玩家，用于室内同场景渲染与走路动画同步。
+   */
+  function sendPosition(x, z, yaw = 0, meta = null) {
+    posPayload = meta ? { x, z, yaw, ...meta } : { x, z, yaw };
     if (!ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: 'position', payload: posPayload }));
   }

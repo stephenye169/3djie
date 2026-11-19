@@ -12,7 +12,7 @@ import { query, run, randomId } from './db.js';
 import { authMiddleware } from './auth.js';
 import { settle, activeBuffs } from './economy.js';
 import { broadcastBattle } from './chat.js';
-import { formatMoney, shopFlowTierFor, BUFF_TYPES } from '../shared/assets.js';
+import { formatMoney, shopFlowTierFor, BUFF_TYPES, STAMINA_PICK_MIN } from '../shared/assets.js';
 import {
   talentLevelOf, goldHandCritRate, goldHandCritReward, idleRentFactor,
 } from '../shared/prestige.js';
@@ -113,10 +113,19 @@ router.post('/collect', authMiddleware, (req, res) => {
   settle(req.user.id);
 
   const row = query(
-    'SELECT balance, last_coin_at, last_box_at FROM users WHERE id = ?',
+    'SELECT balance, last_coin_at, last_box_at, stamina FROM users WHERE id = ?',
     [req.user.id]
   )[0];
   if (!row) return res.status(404).json({ error: '用户不存在' });
+
+  // 体能门槛：低体能状态无法拾取任何金币——先去店里买点吃的补充能量
+  const stamina = Number(row.stamina) || 0;
+  if (stamina < STAMINA_PICK_MIN) {
+    return res.status(409).json({
+      error: `体能不足（${Math.floor(stamina)}），弯腰捡不动金币——去店里买点吃的补充能量`,
+      stamina: Math.floor(stamina),
+    });
+  }
 
   const now = Date.now();
   const last = Number(type === 'box' ? row.last_box_at : row.last_coin_at) || 0;

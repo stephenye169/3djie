@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 后端主入口（Express + ws）
  * 默认端口 3003，可通过 PORT 环境变量覆盖
  *
@@ -8,15 +8,18 @@
  *   GET  /api/me                     当前登录用户（需 token）
  *   GET  /api/shops                  商铺列表
  *   GET  /api/shops/:id/products     某商铺商品
- *   GET  /api/shops/:id/flow         店铺消费流水与档位
- *   POST /api/orders                 下单（需 token；实付 10% 实时分给店铺收购人）
- *   GET  /api/inventory              我的库存（已购未转售商品）
- *   POST /api/orders/resell          转售库存商品（回收价 = 标价 85%~110% 随机）
+ *   GET  /api/shops/:id/flow         店铺消费流水与档位（餐饮店门槛减半）
+ *   GET  /api/shops/flowtiers        达流水档位店铺列表（客源金币刷新点）
+ *   POST /api/orders                 下单（需 token；实付 10% 实时分给店铺收购人；daily 即食消耗+补体能）
+ *   GET  /api/inventory              我的库存（已购未消耗商品）
+ *   POST /api/inventory/use          使用功能商品（boost 专用，消耗 1 件激活 buff）
+ *   POST /api/orders/resell          转售库存商品（回收价 = 实付价 85%~95% 随机；daily 不可转售）
+ *   POST /api/game/stamina           体能上报（客户端本地权威，服务端限幅校验）
  *   WS   /chat                       WebSocket 聊天
  *
  * 游戏接口（server/game.js）：
- *   GET  /api/game/state             资产状态 + 离线收益结算
- *   POST /api/game/acquire           收购资产
+ *   GET  /api/game/state             资产状态 + 离线收益结算 + buff/体能下发
+ *   POST /api/game/acquire           收购资产（tier≥2 校验 permit 门槛）
  *   POST /api/game/upgrade           豪华装修升级
  *   GET  /api/game/battles           全服战报
  * 资本轮回（server/prestige.js）：
@@ -32,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 import { initDb, query, run, randomId, listUsersForAdmin, setChatBanned, deductBalance } from './db.js';
-import { SHOP_ROYALTY_RATE, SHOP_RESELL_RATE_MIN, SHOP_RESELL_RATE_MAX, shopFlowTierFor } from '../shared/assets.js';
+import { SHOP_ROYALTY_RATE, SHOP_RESELL_RATE_MIN, SHOP_RESELL_RATE_MAX, shopFlowTierFor, STAMINA_MAX } from '../shared/assets.js';
 import authRouter, { authMiddleware, adminMiddleware } from './auth.js';
 import { publicRouter as announcementsRouter, adminRouter as adminAnnouncementsRouter } from './announcements.js';
 import { registerSocket, players, roomStats, ROOM_CAPACITY } from './chat.js';
@@ -66,11 +69,9 @@ app.get('/api/chat/rooms', (_req, res) => {
 
 // 鉴权路由
 app.use('/api/auth', authRouter);
-
 // 系统公告
 app.use('/api/announcements', announcementsRouter);
 app.use('/api/admin/announcements', adminAnnouncementsRouter);
-
 // 游戏数值与收购
 app.use('/api/game', gameRouter);
 // 街头经济：金币拾取 / 碰瓷 NPC / 家族分红
@@ -111,9 +112,8 @@ app.get('/api/shops', (_req, res) => {
   const rows = query('SELECT id, name, category, emoji, description, layout_z, side FROM shops WHERE active = 1 ORDER BY layout_z');
   res.json(rows);
 });
-
 app.get('/api/shops/:id/products', (req, res) => {
-  const products = query('SELECT id, name, price, kind, buff FROM products WHERE shop_id = ? ORDER BY sort_order', [req.params.id]);
+  const products = query('SELECT id, name, price, kind, buff, stamina FROM products WHERE shop_id = ? ORDER BY sort_order', [req.params.id]);
   res.json(products);
 });
 
@@ -133,34 +133,41 @@ app.get('/api/orders/my', authMiddleware, (req, res) => {
   res.json({ orders, coupons });
 });
 
-/** 增益激活：解析商品 buff 编码写入 buffs_json（同类型重复激活叠加时长） */
+/** 增益激活：解析商品 buff 编码写入 buffs_json（新格式 {until, total}——total 供前端进度条） */
 function applyProductBuff(userId, buffStr, qty) {
-  if (!buffStr) return { type: null, until: 0 };
+  if (!buffStr) return { type: null, until: 0, total: 0 };
   const [type, ms] = String(buffStr).split(':');
   const duration = Number(ms) || 0;
-  if (!type || duration <= 0) return { type: null, until: 0 };
+  if (!type || duration <= 0) return { type: null, until: 0, total: 0 };
   const cur = query('SELECT buffs_json FROM users WHERE id = ?', [userId])[0]?.buffs_json;
-  const buffs = (() => { try { return JSON.parse(cur || '{}'); } catch { return {}; } })();
+  const buffs = (() => {
+    try { return JSON.parse(cur || '{}'); } catch { return {}; }
+  })();
   const now = Date.now();
-  const base = Math.max(now, Number(buffs[type]) || now);
+  const prev = buffs[type];
+  const prevUntil = typeof prev === 'object' && prev ? Number(prev.until) : Number(prev) || 0;
+  const base = Math.max(now, prevUntil);
   const until = base + duration * qty;
-  buffs[type] = until;
+  // total = 本次激活覆盖的总时长（从叠加基准点到新到期时刻），供前端进度条按比例递减
+  const total = until - base + (prevUntil > now ? Math.min(duration, prevUntil - now) : 0);
+  buffs[type] = { until, total: Math.max(duration, total) };
   run('UPDATE users SET buffs_json = ? WHERE id = ?', [JSON.stringify(buffs), userId]);
-  return { type, until };
+  return { type, until, total: buffs[type].total };
 }
 
-// 下单（每日限购 + 优惠券自动抵扣 + 写订单）
+// 下单（每日限购 + 优惠券自动抵扣 + 写订单；daily 即食买后立即生效并恢复体能）
 app.post('/api/orders', authMiddleware, (req, res) => {
   const { product_id, qty = 1 } = req.body || {};
   if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
   const q = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
 
-  const prods = query('SELECT id, shop_id, name, price, kind, buff FROM products WHERE id = ?', [product_id]);
+  const prods = query('SELECT id, shop_id, name, price, kind, buff, stamina FROM products WHERE id = ?', [product_id]);
   if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
   const p = prods[0];
 
   // 每人每商品每日限购 3 件（防一键扫货）
-  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
   const bought = Number(query(
     'SELECT SUM(qty) AS s FROM orders WHERE user_id = ? AND product_id = ? AND created_at >= ?',
     [req.user.id, product_id, dayStart.getTime()]
@@ -212,6 +219,14 @@ app.post('/api/orders', authMiddleware, (req, res) => {
     buffUntil = applied.until;
   }
 
+  // 食品饮品类（daily 带 stamina 值）：买完立即补充体能——餐饮店刚需闭环
+  let staminaAfter = null;
+  const recover = Math.round((Number(p.stamina) || 0) * q);
+  if (recover > 0) {
+    run('UPDATE users SET stamina = MIN(100, MAX(0, stamina + ?)) WHERE id = ?', [recover, req.user.id]);
+    staminaAfter = Math.round(Number(query('SELECT stamina FROM users WHERE id = ?', [req.user.id])[0]?.stamina) || 0);
+  }
+
   const remaining = Number(query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0]?.balance ?? 0);
   res.json({
     ok: true, product: p, qty: q, total,
@@ -219,6 +234,7 @@ app.post('/api/orders', authMiddleware, (req, res) => {
     remaining: Math.max(0, Math.floor(remaining)),
     royalty, shopId: p.shop_id,
     buffType: buffType || null, buffUntil: buffUntil || null,
+    stamina: staminaAfter,
   });
 });
 
@@ -370,6 +386,22 @@ app.get('/api/shops/flowtiers', (_req, res) => {
   res.json(shops);
 });
 
+// 体能上报：客户端本地权威（走路消耗/站立恢复），服务端限幅校验防瞬移刷库
+app.post('/api/game/stamina', authMiddleware, (req, res) => {
+  const value = Math.max(0, Math.min(100, Number(req.body?.value)));
+  if (!Number.isFinite(value)) return res.status(400).json({ error: 'value 无效' });
+
+  const row = query('SELECT stamina FROM users WHERE id = ?', [req.user.id])[0];
+  if (!row) return res.status(404).json({ error: '用户不存在' });
+
+  // 限幅：两次上报间隔内最多变化 25 点（客户端 5s 上报一次，物理极限远低于此）
+  const now = Date.now();
+  const cur = Number(row.stamina) || 0;
+  const next = Math.max(cur - 25, Math.min(cur + 25, value));
+  run('UPDATE users SET stamina = ? WHERE id = ?', [next, req.user.id]);
+  res.json({ ok: true, stamina: Math.round(next * 10) / 10 });
+});
+
 // 错误兜底
 app.use((err, _req, res, _next) => {
   console.error('[express]', err);
@@ -379,7 +411,7 @@ app.use((err, _req, res, _next) => {
 async function start() {
   await initDb();
   console.log('[db] SQLite initialized');
-  initCapital(); // 清理上次进程残留的踢馆记录
+  initCapital(); // 清理上次进程残留的踢馆记录（托管金退款）
   tickCrowd(); // 启动时先跑一轮众筹结算（补上停机期间的分红累积与到期判定）
   startTop1Watch(); // 全服首富检测：易主时跨房间播报（启动只建立基线）
 

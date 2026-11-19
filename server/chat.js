@@ -32,13 +32,17 @@ import {
 } from './db.js';
 import { JWT_SECRET } from './auth.js';
 import { counterOffer, counterReply } from './capital.js';
+import { ASSETS } from '../shared/assets.js';
+
+// 室内场景白名单：只接受已知资产的 shopId，避免客户端塞任意字符串
+const SHOP_IDS = new Set(ASSETS.map((a) => a.id));
 
 export const MAX_ROOMS = 10;         // 房间编号上限：1–10
 export const ROOM_CAPACITY = 30;     // 每房人数上限（按去重后的在线用户计）
 
 const randomId = () => `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-// userId → { user, x, z, yaw, lastSeen }
+// userId → { user, x, z, yaw, scene, shopId, moving, sprinting, dnd }
 const players = new Map();
 // userId → Set<WebSocket>
 const connections = new Map();
@@ -101,11 +105,17 @@ export function registerSocket(ws, req) {
         }
         case 'position': {
           if (!userId) return;
-          const { x, z, yaw } = msg.payload || {};
+          const { x, z, yaw, scene, shopId, moving, sprinting } = msg.payload || {};
           if (typeof x === 'number' && typeof z === 'number') {
             const p = players.get(userId);
             if (!p) return; // 连接在但玩家已被清理：忽略，等待下次 hello
             p.x = x; p.z = z; p.yaw = yaw ?? 0;
+            // 场景归属：街道 or 某店铺室内（坐标均为世界坐标，各端房间原点一致）
+            const interior = scene === 'interior' && typeof shopId === 'string' && SHOP_IDS.has(shopId);
+            p.scene = interior ? 'interior' : 'street';
+            p.shopId = interior ? shopId : null;
+            p.moving = !!moving;
+            p.sprinting = !!sprinting;
           }
           break;
         }
@@ -291,7 +301,10 @@ function joinPlayer(ws, userId, roomId) {
   rooms.get(roomId).add(ws);
 
   if (!players.has(userId)) {
-    players.set(userId, { user, x: 0, z: 10, yaw: 0 });
+    players.set(userId, {
+      user, x: 0, z: 10, yaw: 0,
+      scene: 'street', shopId: null, moving: false, sprinting: false,
+    });
   } else {
     // 同一用户多开：复用已有位置
     players.get(userId).user = user;
@@ -400,6 +413,8 @@ export function buildNearbyList(roomId) {
         id, nickname: p.user.nickname, variant: p.user.variant,
         title: p.user.title,
         x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +(p.yaw || 0).toFixed(3),
+        scene: p.scene || 'street', shopId: p.shopId || null,
+        moving: !!p.moving, sprinting: !!p.sprinting,
       });
     }
     return out;
@@ -409,6 +424,8 @@ export function buildNearbyList(roomId) {
       id, nickname: p.user.nickname, variant: p.user.variant,
       title: p.user.title,
       x: +p.x.toFixed(2), z: +p.z.toFixed(2), yaw: +(p.yaw || 0).toFixed(3),
+      scene: p.scene || 'street', shopId: p.shopId || null,
+      moving: !!p.moving, sprinting: !!p.sprinting,
     });
   }
   return out;

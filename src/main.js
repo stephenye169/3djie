@@ -37,21 +37,20 @@ import { QuestCard } from './ui/QuestCard.js';
 import { PrestigePanel } from './ui/PrestigePanel.js';
 import { lootMoney } from './ui/LootFx.js';
 import { gameStore } from './state/game.js';
-import { formatMoney, TELEPORT_COST, BUFF_TYPES } from '../shared/assets.js';
+import { formatMoney, TELEPORT_COST, BUFF_TYPES, STAMINA_MAX, STAMINA_WALK_DRAIN, STAMINA_SPRINT_DRAIN, STAMINA_IDLE_REGEN, STAMINA_PICK_MIN, STAMINA_HINT_COOLDOWN_MS, STAMINA_REPORT_INTERVAL_MS } from '../shared/assets.js';
 import { getShopById } from './data/shops.js';
 import { getShopNpc } from './data/npcs.js';
 import { showToast } from './ui/toast.js';
 import { WalletPanel } from './ui/WalletPanel.js';
 import { ShopProductsCard } from './ui/ShopProductsCard.js';
-import { api, setToken, getToken, createChatClient } from './api/client.js';
+import { api, setToken, getToken, getSavedAccount, saveAccount, clearAccount, createChatClient } from './api/client.js';
 
-// 同浏览器多开联调：URL 带 ?fresh 时清掉本标签的登录态，强制以新客户端重新选角色
-// （浏览器复制标签页会连同 sessionStorage 一起复制，这时加 ?fresh 即可换一个玩家）
+// 同浏览器多开联调：URL 带 ?fresh 时清掉持久化的身份，强制新建一个玩家
+// （账号默认保存在 localStorage，同一浏览器的多个标签页是同一个玩家；同屏联调就用 ?fresh）
 {
   const url = new URL(location.href);
   if (url.searchParams.has('fresh')) {
-    setToken(null);
-    sessionStorage.removeItem('qingguo_session_pwd');
+    clearAccount();
     url.searchParams.delete('fresh');
     history.replaceState(null, '', url.pathname + url.search + url.hash);
   }
@@ -154,24 +153,25 @@ function showCharacterSelect(onPick) {
     localStorage.setItem(LAST_NICK_KEY, stripDateSuffix(nick));
 
     try {
-      // 注册到后端：username 用"昵称+时间戳"保证唯一，密码是当前会话随机串
-      const sessionPwd = sessionStorage.getItem('qingguo_session_pwd') ||
-        (sessionStorage.setItem('qingguo_session_pwd', Math.random().toString(36).slice(2, 14) + 'xY') || sessionStorage.getItem('qingguo_session_pwd'));
+      // 注册到后端：username 用"昵称+时间戳"保证唯一；密码与账号一并持久化，
+      // 以便 token 过期 / 关闭浏览器后自动重新登录回同一个账号
+      const accountPwd = getSavedAccount()?.password || (Math.random().toString(36).slice(2, 14) + 'xY');
       const username = `${nick.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '')}_${Date.now().toString(36)}`;
 
       let reg;
       try {
-        reg = await api.register(username, sessionPwd, nick, variant);
+        reg = await api.register(username, accountPwd, nick, variant);
       } catch (err) {
         // 用户名冲突——换一个再试
         if (err.status === 409) {
-          reg = await api.register(username + '_' + Math.random().toString(36).slice(2, 6), sessionPwd, nick, variant);
+          reg = await api.register(username + '_' + Math.random().toString(36).slice(2, 6), accountPwd, nick, variant);
         } else {
           throw err;
         }
       }
 
       setToken(reg.token);
+      saveAccount({ username: reg.user.username, password: accountPwd });
       showToast(`欢迎「${reg.user.nickname}」`);
       onPick({ variant, nickname: reg.user.nickname, id: reg.user.id });
     } catch (err) {
@@ -224,13 +224,38 @@ async function bootstrap() {
       start(world, me, scene, camera, renderer);
       return;
     } catch (err) {
-      // token 失效：清掉，走角色选择
+      // token 失效：清掉，留着账号凭据走重新登录
       setToken(null);
-      console.warn('[auth] token expired, showing char select');
+      console.warn('[auth] token expired, trying saved account');
     }
   }
 
-  // 没 token 或 token 失效 → 角色选择 → 注册 → start
+  // token 缺失/过期 → 用持久化的账号密码重新登录（关闭浏览器后仍是同一个玩家）
+  const savedAccount = getSavedAccount();
+  if (savedAccount) {
+    try {
+      const res = await api.login(savedAccount.username, savedAccount.password);
+      setToken(res.token);
+      start(world, res.user, scene, camera, renderer);
+      return;
+    } catch (err) {
+      // 401/404 = 账号在服务端已不存在（例如换了数据库）：丢弃凭据，走新角色流程
+      if (err.status === 401 || err.status === 404) {
+        clearAccount();
+        console.warn('[auth] saved account invalid, showing char select');
+      } else {
+        // 网络错误等临时故障：保留凭据，不要误开新账号，直接重试入口
+        console.warn('[auth] auto login failed:', err.message);
+        loadingStatus.textContent = '自动登录失败：' + (err.message || '请确认后端已启动');
+        loadingScreen.classList.remove('hidden');
+        retryBtn.classList.remove('hidden');
+        retryBtn.onclick = () => window.location.reload();
+        return;
+      }
+    }
+  }
+
+  // 没有可用身份 → 角色选择 → 注册 → start
   showCharacterSelect((user) => {
     start(world, user, scene, camera, renderer);
   });
@@ -249,6 +274,7 @@ function start(world, user, scene, camera, renderer) {
   // 第三人称摄像机
   const tpCamera = new ThirdPersonCamera(camera, renderer.domElement);
   window.__tpCam = tpCamera; // 调试钩子：控制台可查/改 yaw·pitch（排障与自动化截图用）
+  window.__player = player; // 调试钩子：控制台可查位置/速度（排障与自动化测试用）
 
   // ---- 界面元素 ----
   const shopListEl = document.getElementById('shop-list');
@@ -399,8 +425,17 @@ function start(world, user, scene, camera, renderer) {
 
   const coinRain = new CoinRain(scene, player, world.groundY, world.bounds, camera, renderer.domElement, {
     onCollect: async (type, entry) => {
+      // 体能预拦截：低体能无法拾取（服务端同样校验，双保险）；提示 2 秒节流防刷屏
+      if (stamina < STAMINA_PICK_MIN) {
+        hintStamina(`体能过低，无法拾取金币，请前往餐饮店吃喝补充能量！（站立每 3 秒 +1 保底回能）`);
+        return false;
+      }
       const res = await gameStore.collect(type, entry?.shopId);
       if (!res.ok) {
+        if (res.status === 409 && /体能不足/.test(res.message || '')) {
+          hintStamina(`体能过低，无法拾取金币，请前往餐饮店吃喝补充能量！`);
+          return false;
+        }
         if (res.status !== 429) showToast(res.message || '拾取失败');
         return false;
       }
@@ -417,7 +452,7 @@ function start(world, user, scene, camera, renderer) {
     },
   });
 
-  // ---- 商品 buff：驱动移动速度 / 拾取半径，顶部状态条展示剩余时间 ----
+  // ---- 商品 buff：驱动移动速度 / 拾取半径，顶部状态条（倒计时进度条）展示剩余时间 ----
   // （放在 coinRain 之后：subscribe 首次回调立即执行，避免 TDZ）
   const buffBarEl = document.getElementById('buff-bar');
   let buffItems = [];
@@ -427,20 +462,103 @@ function start(world, user, scene, camera, renderer) {
     coinRain.setMagnetMult(buffs.magnet ? BUFF_TYPES.magnet.mult : 1);
     buffItems = Object.entries(buffs)
       .filter(([type]) => BUFF_TYPES[type])
-      .map(([type, until]) => ({ type, icon: BUFF_TYPES[type].icon, name: BUFF_TYPES[type].name, until: Number(until) }));
+      .map(([type, v]) => {
+        const until = typeof v === 'object' && v ? Number(v.until) : Number(v);
+        const total = typeof v === 'object' && v ? Number(v.total) || null : null;
+        return { type, icon: BUFF_TYPES[type].icon, name: BUFF_TYPES[type].name, until, total };
+      });
     renderBuffBar();
   }
+  // buff 条只在「激活集合变化」时重建 DOM，其余 tick 只改秒数与进度条宽度，
+  // 避免每 250ms 解析一次 innerHTML 触发重排
+  const buffChips = new Map(); // type -> { el, secEl, fillEl, name }
+  let buffBarSig = '';
   function renderBuffBar() {
     if (!buffBarEl) return;
     const now = Date.now();
     const alive = buffItems.filter((b) => b.until > now);
-    buffBarEl.classList.toggle('hidden', alive.length === 0);
-    buffBarEl.innerHTML = alive.map((b) =>
-      `<span class="buff-chip" title="${b.name}">${b.icon} ${Math.ceil((b.until - now) / 1000)}s</span>`
-    ).join('');
+    const sig = alive.map((b) => `${b.type}:${b.until}:${b.total}`).join('|');
+    if (sig !== buffBarSig) {
+      buffBarSig = sig;
+      buffChips.clear();
+      buffBarEl.innerHTML = '';
+      buffBarEl.classList.toggle('hidden', alive.length === 0);
+      for (const b of alive) {
+        const el = document.createElement('span');
+        el.className = 'buff-chip';
+        el.textContent = `${b.icon} `;
+        const secEl = document.createElement('span');
+        secEl.className = 'buff-sec';
+        el.appendChild(secEl);
+        // 进度条：剩余 / 总时长；旧格式（无 total）降级为纯秒数
+        let fillEl = null;
+        if (b.total) {
+          const track = document.createElement('span');
+          track.className = 'buff-track';
+          fillEl = document.createElement('i');
+          track.appendChild(fillEl);
+          el.appendChild(track);
+        }
+        buffBarEl.appendChild(el);
+        buffChips.set(b.type, { el, secEl, fillEl, name: b.name });
+      }
+    }
+    for (const b of alive) {
+      const chip = buffChips.get(b.type);
+      if (!chip) continue;
+      const leftSec = Math.max(0, Math.ceil((b.until - now) / 1000));
+      const secText = `${leftSec}s`;
+      if (chip.secEl.textContent !== secText) chip.secEl.textContent = secText;
+      chip.el.title = `${chip.name} · 剩余 ${leftSec} 秒`;
+      if (chip.fillEl) {
+        const pct = Math.min(100, Math.max(0, ((b.until - now) / b.total) * 100)).toFixed(1);
+        if (chip.fillEl.style.width !== pct + '%') chip.fillEl.style.width = pct + '%';
+      }
+    }
   }
   gameStore.subscribe((view) => applyBuffs(view));
-  setInterval(renderBuffBar, 1000);
+  setInterval(renderBuffBar, 250); // 进度条丝滑递减
+
+  // ---- 体能系统：普通行走微耗 / 冲刺重耗；低于阈值无法捡金币且禁冲刺，买食品补充（餐饮刚需闭环） ----
+  const staminaFillEl = document.getElementById('stamina-fill');
+  const staminaTextEl = document.getElementById('stamina-text');
+  let stamina = Number(gameStore.view()?.stamina ?? STAMINA_MAX);
+  let staminaHintAt = 0; // 低体能提示节流（每 2 秒最多一次）
+  let staminaReportAt = 0;
+  const isMoving = () => Math.hypot(player.velocity.x, player.velocity.z) > 0.1;
+  function hintStamina(msg) {
+    const now = Date.now();
+    if (now - staminaHintAt < STAMINA_HINT_COOLDOWN_MS) return;
+    staminaHintAt = now;
+    showToast(msg);
+  }
+  function renderStamina() {
+    if (!staminaFillEl || !staminaTextEl) return;
+    const pct = Math.max(0, Math.min(STAMINA_MAX, stamina));
+    staminaFillEl.style.width = `${pct}%`;
+    staminaFillEl.dataset.level = pct < STAMINA_PICK_MIN ? 'danger' : pct < 50 ? 'warn' : 'ok';
+    staminaTextEl.textContent = `体能 ${Math.floor(pct)} / ${STAMINA_MAX}`;
+  }
+  setInterval(() => {
+    const dt = 0.25;
+    const moving = isMoving();
+    const sprinting = moving && input.sprint && stamina >= STAMINA_PICK_MIN; // 低体能禁冲刺
+    player.sprintBlocked = stamina < STAMINA_PICK_MIN;
+    // 分档消耗：普通行走每 2 秒 1 点、冲刺每秒 2 点；站立每 3 秒 +1 保底回能
+    const drainPerSec = sprinting ? STAMINA_SPRINT_DRAIN : STAMINA_WALK_DRAIN;
+    stamina = Math.max(0, Math.min(STAMINA_MAX, stamina + (moving ? -drainPerSec : STAMINA_IDLE_REGEN) * dt));
+    renderStamina();
+    // 每 5 秒上报一次（服务端限幅校验；响应偏差大时以服务端为准）
+    if (Date.now() - staminaReportAt >= STAMINA_REPORT_INTERVAL_MS) {
+      staminaReportAt = Date.now();
+      api.reportStamina(Math.round(stamina * 10) / 10).then((r) => {
+        if (r?.ok && Math.abs(r.stamina - stamina) > 5) {
+          stamina = r.stamina;
+          renderStamina();
+        }
+      }).catch(() => { /* 网络失败忽略，下个周期再报 */ });
+    }
+  }, 250);
 
   const tauntNpcs = new TauntNpcs(scene, world.groundY, {
     onTrigger: (cfg) => {
@@ -563,6 +681,9 @@ function start(world, user, scene, camera, renderer) {
     }
 
     showToast(`已进入「${shop.name}」· 点击店员或按 E 交谈`);
+    // 立即广播进店状态：同店的其他玩家马上能看到我，街上的人则隐藏我
+    refreshRemoteVisibility();
+    sendScenePosition();
   }
 
   /** 返回街道 */
@@ -600,6 +721,8 @@ function start(world, user, scene, camera, renderer) {
     }
 
     showToast('已返回青果巷');
+    refreshRemoteVisibility();
+    sendScenePosition();
   }
 
   // 离开店铺：按钮或 Esc（对话中 Esc 优先结束对话）
@@ -1412,6 +1535,26 @@ function start(world, user, scene, camera, renderer) {
     });
   }
 
+  /** 远端玩家是否与我同处一个场景（街道 / 同一家店铺室内） */
+  function remoteInMyScene(entry) {
+    if (mode === 'interior') {
+      return entry.scene === 'interior' && entry.shopId === interiorManager.activeId;
+    }
+    return entry.scene !== 'interior';
+  }
+
+  /** 切换场景后立即刷新远端可见性（不必等下一秒 players 推送） */
+  function refreshRemoteVisibility() {
+    for (const entry of remotePlayers.values()) {
+      const visible = remoteInMyScene(entry);
+      const changed = entry.player.mesh.visible !== visible;
+      entry.player.mesh.visible = visible;
+      // 可见性变化时清空档位缓存，让下一轮标签裁剪重新应用（否则重回同场景气泡不显示）
+      if (changed) entry.labelMode = null;
+      if (!visible && entry.bubble) entry.bubble.visible = false;
+    }
+  }
+
   function syncRemotePlayers(list) {
     const seen = new Set();
     for (const p of list) {
@@ -1419,9 +1562,20 @@ function start(world, user, scene, camera, renderer) {
       seen.add(p.id);
       const entry = remotePlayers.get(p.id);
       if (entry) {
+        // 场景归属变化（进出店铺）→ 位置跨坐标区跳变，直接吸附而不是插值横穿几百米
+        const sceneChanged =
+          entry.scene !== (p.scene || 'street') || entry.shopId !== (p.shopId || null);
+        entry.scene = p.scene || 'street';
+        entry.shopId = p.shopId || null;
+        entry.moving = !!p.moving;
+        entry.sprinting = !!p.sprinting;
         entry.tx = p.x;
         entry.tz = p.z;
         entry.tyaw = p.yaw || 0;
+        if (sceneChanged) {
+          entry.player.mesh.position.set(p.x, world.groundY + entry.player.height / 2, p.z);
+          entry.player.mesh.rotation.y = p.yaw || 0;
+        }
         // 每秒 push 带 title/nickname，只有变化时重画（Canvas 操作费 GPU）
         const nameChanged = entry.name !== p.nickname;
         const titleChanged = entry.title !== p.title;
@@ -1442,6 +1596,10 @@ function start(world, user, scene, camera, renderer) {
           name: p.nickname,
           title: p.title,
           tx: p.x, tz: p.z, tyaw: p.yaw || 0,
+          scene: p.scene || 'street',
+          shopId: p.shopId || null,
+          moving: !!p.moving,
+          sprinting: !!p.sprinting,
           labelMode: 'full',
         };
         applyRemoteBubble(newEntry, 'full');
@@ -1460,6 +1618,8 @@ function start(world, user, scene, camera, renderer) {
       top1Auras.delete(id);
       remotePlayers.delete(id);
     }
+    // 场景不同（他在店内 / 我在店内）的远端玩家不渲染
+    refreshRemoteVisibility();
     // 新人上线／他人下线后重算一遍首富光环（幂等，只增删差异）
     applyTop1Visuals();
   }
@@ -1491,25 +1651,35 @@ function start(world, user, scene, camera, renderer) {
    * Canvas 只在档位变化时重绘（applyRemoteBubble 内部按 labelMode 判断），帧开销仅为距离与视锥计算。
    * 遮挡剔除（Raycaster）：约 300ms 一轮低频射线，玩家标签被建筑挡住时隐藏——结果缓存在 entry.occluded。
    */
+  const labelSorted = []; // 复用数组 + entry._dist：避免逐帧重建排序对象
+  let labelTick = 0;
+
   function updateRemoteLabels() {
     if (remotePlayers.size === 0) return;
+    // 档位阈值是米级、视锥范围的视觉余量也很大，10Hz 刷新足够（逐帧排序纯浪费）
+    labelTick += 1;
+    if (labelTick % 6 !== 0) return;
+
     const camPos = camera.position;
     _projMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_projMat);
 
-    // 遮挡判断降频跑（60fps 下每 18 帧 ≈ 300ms），射线目标只有建筑集合
+    // 遮挡判断降频跑（10Hz 下每 3 轮 ≈ 300ms），射线目标只有建筑集合
     occlTick += 1;
-    const runOcclusion = occlTick % 18 === 0;
+    const runOcclusion = occlTick % 3 === 0;
 
     // 按距离升序，最近 LABEL_MAX_FULL 个才有资格显示完整双行
-    const sorted = [];
+    labelSorted.length = 0;
     for (const entry of remotePlayers.values()) {
-      sorted.push({ entry, dist: entry.player.mesh.position.distanceTo(camPos) });
+      if (!entry.player.mesh.visible) continue; // 不同场景的远端玩家不参与标签裁剪
+      entry._dist = entry.player.mesh.position.distanceTo(camPos);
+      labelSorted.push(entry);
     }
-    sorted.sort((a, b) => a.dist - b.dist);
+    labelSorted.sort((a, b) => a._dist - b._dist);
 
-    for (let i = 0; i < sorted.length; i++) {
-      const { entry, dist } = sorted[i];
+    for (let i = 0; i < labelSorted.length; i++) {
+      const entry = labelSorted[i];
+      const dist = entry._dist;
       const inFrustum = _frustum.containsPoint(entry.player.mesh.position);
       const forced = forceLabelIds.has(entry.id) || entry.id === currentPeer;
 
@@ -1721,8 +1891,7 @@ function start(world, user, scene, camera, renderer) {
   const danmaku = new Danmaku();
   danmaku.bind(chat);
   danmaku.loadHistory();
-  // 首次上报一次位置，避免服务端用默认坐标展示
-  chat.sendPosition(player.position.x, player.position.z, player.mesh.rotation.y);
+
 
   // 输入框：Enter 发送（广场 / 私聊按 tab 分派），Shift+Enter 换行，Esc 关闭面板
   chatInput?.addEventListener('keydown', (e) => {
@@ -1770,6 +1939,21 @@ function start(world, user, scene, camera, renderer) {
   const input = { forward: false, back: false, left: false, right: false, jump: false, sprint: false };
   let camWasEnabled = true;
   let daylightAcc = 0; // 昼夜更新限频累积器
+
+  /** 上报当前位置 + 场景归属 + 动作状态（室内同步与远端走路动画的数据源） */
+  function sendScenePosition() {
+    const interior = mode === 'interior';
+    const moving = isMoving();
+    chat.sendPosition(player.position.x, player.position.z, player.mesh.rotation.y, {
+      scene: interior ? 'interior' : 'street',
+      shopId: interior ? interiorManager.activeId : null,
+      moving,
+      sprinting: !!(input.sprint && moving),
+    });
+  }
+
+  // 首次上报一次位置，避免服务端用默认坐标展示
+  sendScenePosition();
 
   function openChat() {
     chatOpen = true;
@@ -1855,6 +2039,12 @@ function start(world, user, scene, camera, renderer) {
   window.addEventListener('keyup', (e) => {
     if (keyMap[e.code]) { input[keyMap[e.code]] = false; e.preventDefault(); }
   });
+  // 保险：窗口失焦 / pointer lock 退出时清空按键状态（防 keyup 丢失导致角色持续移动、体能持续消耗）
+  const clearAllKeys = () => { for (const k of Object.keys(keyMap)) input[k] = false; };
+  window.addEventListener('blur', clearAllKeys);
+  document.addEventListener('pointerlockchange', () => {
+    if (!document.pointerLockElement) clearAllKeys();
+  });
 
   // ---- 退出游戏 ----
   const exitModal = document.getElementById('exit-modal');
@@ -1933,13 +2123,17 @@ function start(world, user, scene, camera, renderer) {
     // 其他玩家位置/朝向插值（服务端 1Hz 推送，插值到每帧；演出接管期间跳过）
     const posK = Math.min(1, dt * 8);
     const yawK = Math.min(1, dt * 10);
-    for (const { player: remote, tx, tz, tyaw } of remotePlayers.values()) {
+    for (const entry of remotePlayers.values()) {
+      const remote = entry.player;
+      if (!remote.mesh.visible) continue; // 不同场景（店内/店外）不参与插值
       if (remote.theaterControlled) continue; // 演出接管中：位置由 AttackTheater 驱动
       const m = remote.mesh;
-      m.position.x += (tx - m.position.x) * posK;
-      m.position.z += (tz - m.position.z) * posK;
-      const diff = Math.atan2(Math.sin(tyaw - m.rotation.y), Math.cos(tyaw - m.rotation.y));
+      m.position.x += (entry.tx - m.position.x) * posK;
+      m.position.z += (entry.tz - m.position.z) * posK;
+      const diff = Math.atan2(Math.sin(entry.tyaw - m.rotation.y), Math.cos(entry.tyaw - m.rotation.y));
       m.rotation.y += diff * yawK;
+      // 动作同步：按服务端下发的 moving/sprinting 摆动手脚
+      remote.updateRemoteAnimation(dt, entry.moving, entry.sprinting);
     }
 
     // 踢馆 3D 演出驱动（跑位/挑衅/黑卡飞行）
@@ -2003,11 +2197,10 @@ function start(world, user, scene, camera, renderer) {
     // 走路任务定期上报（10m 以下或 10s 以下不报，后端会拒绝过大的瞬间值）
     if (walkState.meters > 10 && performance.now() >= walkState.nextReportAt) {
       const sent = Math.floor(walkState.meters);
-      gameStore.walkedQuest(sent).then(async (res) => {
-        // 上报成功后拉一次 state，让 quests 里的 walk 进度从 0 跳到实际值
-        if (res.ok) {
-          try { await gameStore.load(); } catch { /* 静默 */ }
-        }
+      // 只回填任务进度：整包 /api/game/state 要扫全服店主 + 18 个资产，
+      // 每 10 秒拉一次纯属浪费，还会重置余额补间时钟
+      gameStore.walkedQuest(sent).then((res) => {
+        if (res.ok && res.quests) gameStore.patchQuests(res.quests);
       });
       walkState.meters = 0;
       walkState.nextReportAt = performance.now() + 10_000;
@@ -2052,12 +2245,12 @@ function start(world, user, scene, camera, renderer) {
       playerStateEl.dataset.state = nextStateCode;
     }
 
-    // 位置同步：街道上每 2s 上报一次（店内是独立坐标系，不上报）
-    if (mode === 'street' && !mapView.active) {
+    // 位置同步：街道与店内都每 2s 上报一次（室内坐标已是世界坐标，各端房间原点一致）
+    if (!mapView.active) {
       const now = performance.now();
       if (now - lastPosSentAt >= 2000) {
         lastPosSentAt = now;
-        chat.sendPosition(player.position.x, player.position.z, player.mesh.rotation.y);
+        sendScenePosition();
       }
     }
 

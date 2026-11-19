@@ -1,6 +1,8 @@
 import { api } from '../api/client.js';
 import { gameStore } from '../state/game.js';
-import { formatMoney, PRODUCT_KINDS, BUFF_TYPES } from '../../shared/assets.js';
+import {
+  formatMoney, PRODUCT_KINDS, BUFF_TYPES, SHOP_ROYALTY_RATE, SHOP_FLOW_TIERS,
+} from '../../shared/assets.js';
 import { showToast } from './toast.js';
 
 /** buff 编码 'type:ms:mult' → 人话说明（如「移动速度 +35% · 60秒」） */
@@ -11,6 +13,15 @@ function buffDesc(buff) {
   if (!def) return '';
   const sec = Math.round(Number(ms) / 1000);
   return `${def.desc} · ${sec >= 60 ? `${Math.round(sec / 60)} 分钟` : `${sec} 秒`}`;
+}
+
+/** 商品行效果说明：增益说明 + 体能恢复量（daily 食品专有） */
+function effectText(p) {
+  const parts = [];
+  const bd = buffDesc(p.buff);
+  if (bd) parts.push(bd);
+  if (Number(p.stamina) > 0) parts.push(`恢复体能 +${Math.round(Number(p.stamina))}`);
+  return parts.join(' · ');
 }
 
 /**
@@ -80,7 +91,7 @@ export class ShopProductsCard {
     const flowHtml = this._flowHtml(flow);
     const rows = (products || []).map((p) => {
       const kind = PRODUCT_KINDS[p.kind] || PRODUCT_KINDS.daily;
-      const effect = buffDesc(p.buff);
+      const effect = effectText(p);
       return `
       <div class="products-row">
         <span class="products-kind" data-kind="${p.kind}">${kind.icon}</span>
@@ -147,7 +158,7 @@ export class ShopProductsCard {
       showToast(`已买入「${res.product?.name || '商品'}」 -¥${formatMoney(res.total)}${res.royalty > 0 ? `（店主抽成 +¥${formatMoney(res.royalty)}）` : ''}${res.couponUsed ? ' · 优惠券已抵扣' : ''}`);
       if (res.buffType && res.buffUntil) {
         const def = BUFF_TYPES[res.buffType];
-        gameStore.patchBuffs(res.buffType, res.buffUntil); // 本地立即合入，状态条与速度/磁铁即时生效
+        gameStore.patchBuffs(res.buffType, res.buffUntil, res.buffUntil - Date.now()); // 本地立即合入，进度条即时生效
         showToast(`${def?.icon || '⚡'} ${def?.name || res.buffType} 生效中！${def?.desc || ''}`);
       } else if (kind?.name) {
         showToast(`已入手${kind.name}类商品`);

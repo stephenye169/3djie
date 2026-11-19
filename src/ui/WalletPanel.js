@@ -141,7 +141,7 @@ export class WalletPanel {
       const res = await api.useInventory(productId);
       const def = BUFF_TYPES[res.buffType] || null;
       showToast(`${def?.icon || '⚡'} 「${res.product?.name || '商品'}」已使用，${def?.desc || '增益生效'}！`);
-      gameStore.patchBuffs(res.buffType, res.buffUntil);
+      gameStore.patchBuffs(res.buffType, res.buffUntil, res.buffUntil - Date.now());
       this._renderInventory();
       await gameStore.refresh?.();
     } catch (err) {

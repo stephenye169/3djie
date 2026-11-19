@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 游戏状态（前端唯一事实来源的本地镜像）
  *
  * - 真值永远在服务端：load() 拉 /api/game/state
@@ -88,6 +88,7 @@ class GameStore {
       nextTitle: this.state.nextTitle,
       assets: this.state.assets,
       buffs: this.state.buffs || {},
+      stamina: this.state.user.stamina,
       dividendPending,
       dividendRate: divRate,
       dividendSynergy: this.state.dividend?.synergyPct ?? 0,
@@ -259,10 +260,18 @@ class GameStore {
     }
   }
 
-  /** 购买增益商品后本地立即合入 buff（服务端 buffs_json 已写入，免整包刷新） */
-  patchBuffs(type, until) {
+  /** 购买增益商品后本地立即合入 buff（服务端 buffs_json 已写入，免整包刷新）
+   *  total = 本次激活总时长，供前端倒计时进度条 */
+  patchBuffs(type, until, total = null) {
     if (!this.state || !type || !until) return;
-    this.state.buffs = { ...(this.state.buffs || {}), [type]: until };
+    this.state.buffs = { ...(this.state.buffs || {}), [type]: { until, total: total || Math.max(1, until - Date.now()) } };
+    this._emit();
+  }
+
+  /** 体能同步：食品恢复（服务端已写入）或上报后本地校准 */
+  patchStamina(value) {
+    if (!this.state || !Number.isFinite(value)) return;
+    this.state.user.stamina = Math.max(0, Math.min(100, value));
     this._emit();
   }
 
@@ -301,14 +310,21 @@ class GameStore {
     }
   }
 
-  /** 走路距离上报（节流由后端负责）。返回 ok 供 main.js 决定是否拉 state 刷新 quests */
+  /** 走路距离上报（节流由后端负责）。后端回传最新 quests，前端只 patch 进度 */
   async walkedQuest(meters) {
     try {
-      await api.walkedQuest(meters);
-      return { ok: true };
+      const res = await api.walkedQuest(meters);
+      return { ok: true, quests: res?.quests || null };
     } catch {
       return { ok: false };
     }
+  }
+
+  /** 只更新任务面板（走路上报等高频场景，避免整包重拉 state） */
+  patchQuests(quests) {
+    if (!this.state || !Array.isArray(quests)) return;
+    this.state.quests = quests;
+    this._emit();
   }
 
   /** 资本轮回：清零全部现金与店铺，换传世黑卡点数（服务端校验门槛） */

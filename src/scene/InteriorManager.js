@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { INTERIOR_STYLES, DEFAULT_INTERIOR_STYLE } from '../data/interiors.js';
 import { getShopNpc } from '../data/npcs.js';
+import { ASSETS } from '../../shared/assets.js';
 
 /**
  * 店铺室内场景管理器
@@ -23,12 +24,31 @@ const DOOR_H = 2.5;
 const BASE_X = 600; // 室内区域起点（远离街道）
 const GAP_X = 40; // 每个房间间距
 
+// 房间坐标必须各客户端一致（多人同室内同步的前提），所以序号按 ASSETS 固定顺序算，
+// 不能用「第几个建造」的递增索引——不同客户端进店顺序不同会算出不同房间位置。
+const ROOM_INDEX = new Map(ASSETS.map((a, i) => [a.id, i]));
+
+/** 未在 ASSETS 中的 shopId 兜底：字符串哈希 → 稳定且不与已知序号冲突 */
+function fallbackRoomIndex(shopId) {
+  let h = 0;
+  for (let i = 0; i < shopId.length; i++) h = (h * 31 + shopId.charCodeAt(i)) | 0;
+  return ASSETS.length + (Math.abs(h) % 100);
+}
+
+function roomIndexOf(shopId) {
+  return ROOM_INDEX.get(shopId) ?? fallbackRoomIndex(shopId);
+}
+
 export class InteriorManager {
   constructor(scene) {
     this.scene = scene;
     this.rooms = new Map();
     this.activeId = null;
-    this._nextIndex = 0;
+  }
+
+  /** 某店铺室内的世界原点（与是否已建造无关，各客户端结果一致） */
+  originOf(shopId) {
+    return { x: BASE_X + roomIndexOf(shopId) * GAP_X, z: 0 };
   }
 
   /** 进入（或首次构建）某店铺的室内，返回房间信息 */
@@ -55,9 +75,9 @@ export class InteriorManager {
 
   _buildRoom(shopId, shop) {
     const style = INTERIOR_STYLES[shopId] || DEFAULT_INTERIOR_STYLE;
-    const index = this._nextIndex++;
-    const ox = BASE_X + index * GAP_X;
-    const oz = 0;
+    const origin = this.originOf(shopId);
+    const ox = origin.x;
+    const oz = origin.z;
 
     const group = new THREE.Group();
     group.position.set(ox, 0, oz);

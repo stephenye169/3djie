@@ -62,6 +62,7 @@
 - **懒构建 + 缓存**：首次进店才生成房间几何体，再次进入直接复用。
 - **状态隔离**：进店时替换 `Player` 的 `colliders / bounds / groundY`，离店还原；同一时刻仅显示当前房间。
 - **过渡与视效**：`#scene-fade` 遮罩淡出→切换→淡入；相机调用 `snap()` 立即对齐，防止横跨 600m 飞镜；天花板正面朝下，外部俯视自动背面剔除，不遮挡第三人称镜头。
+- **多人坐标一致**：房间序号按 `ASSETS` 固定顺序计算（而非「第几个建造」），各客户端算出的房间世界原点相同；配合 `position` 消息里的 `scene / shopId`，同店玩家可在同一室内场景互相看见。
 
 ### 2.2 店铺三层交互与两级拾取兜底
 
@@ -143,7 +144,7 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 | type | 方向 | payload | 说明 |
 | --- | --- | --- | --- |
 | `hello` | C→S | `{ token }` | 鉴权握手与入房（满 30 人返回 `room-full` 并关闭） |
-| `position` | C→S | `{ x, z, yaw }` | 位置上报（同步给同房间玩家） |
+| `position` | C→S | `{ x, z, yaw, scene?, shopId?, moving?, sprinting? }` | 位置 + 场景归属 + 动作状态上报（同步给同房间玩家；`scene='interior'` 时 `shopId` 需在资产白名单内） |
 | `global_chat` | C→S | `{ text }` | **全服广场发言**（3s 限频，`dnd` 模式下禁言） |
 | `global_msg` | S→C | `{ id, from, text, ts }` | **全服广场广播**（全服在线连接接收） |
 | `dm` | C→S / S→C | `{ to, text }` / `{ from, to, text, ts }` | 一对一私聊（仅回显收发双方） |
@@ -153,7 +154,7 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 | `counter_offer` | C→S | `{ attackId, price }` | 踢馆防守方发起一次性还价 |
 | `counter_reply` | C→S | `{ attackId, accept }` | 踢馆攻击方同意或拒绝还价 |
 | `welcome` | S→C | `{ self, room, online, globalHistory, blocked, dnd }` | 握手成功回执（含房间号与最近 30 条广场历史） |
-| `players` | S→C | `[{ id, nickname, variant, title, x, z, yaw }]` | 1Hz 推送**本房间**玩家位置与称号 |
+| `players` | S→C | `[{ id, nickname, variant, title, x, z, yaw, scene, shopId, moving, sprinting }]` | 1Hz 推送**本房间**玩家位置、场景归属、动作状态与称号 |
 | `blocked` | S→C | `{ blocked: [id] }` | 拉黑列表变更回执 |
 | `shop_attack` | S→C | `{ attackId, shopId, shopName, attackerId, attackerNick, bid, defendCost, counterMin, counterMax, expiresAt }` | **被踢馆警报**（仅发原店主，跨房可达） |
 | `counter_pending` / `counter_ack` / `counter_rejected` / `counter_reply_ack` | S→C | — | 议价状态同步回执 |
@@ -273,7 +274,7 @@ JSON 消息格式：`{ "type": "...", "payload": { ... } }`
 ## 8. 已知技术限制
 
 - **无美术资产与触屏适配**：仓库未附带 `.glb` 与贴图；操作依赖桌面键盘与 Pointer Lock。
-- **远端玩家局限**：进店后其他玩家无法进入室内同步，远端角色仍停留在店门口；远端移动仅做位置/朝向插值，暂不播放走路摆臂。
+- **远端玩家同步范围**：已支持同店室内同场景（`scene/shopId` + 确定性房间原点）与走路/奔跑摆臂（`moving/sprinting`）；仍为 2s 一次位置上报 + 1Hz 广播，未同步跳跃、表情和上半身动作，瞬时动作（如踢馆演出）仍以本地表现为主。
 - **单机 SQLite 写锁**：`sql.js` 现为 400ms 节流异步全量快照落盘，仍勿多进程并发写同一 `.db` 文件（压测需用 `DB_PATH` 隔离）；早先同步落盘基准上限 ~180–190 次/s。
 - **多人同屏帧率待复测**：角色合批后 30 人同房约 ~51 FPS；现 `ProceduralStreet.js` 已简化建筑体块并全街按材质合并，可基于当前版本复测 30 人同房帧率表现。
 - **前端拾取与局部状态**：金币雨掉落位置由前端触发（奖励仍由后端生成防篡改）；秘书人设与静音配置仅存在浏览器 `localStorage`。

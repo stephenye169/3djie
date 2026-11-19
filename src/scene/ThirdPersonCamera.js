@@ -23,6 +23,9 @@ export class ThirdPersonCamera {
     this.locked = false;
     this.enabled = true; // 地图模式下为 false：不抢指针锁
     this._targetPos = new THREE.Vector3();
+    // 复用临时向量：update() 每帧调用，避免每帧 new Vector3 触发 GC
+    this._offset = new THREE.Vector3();
+    this._desiredPos = new THREE.Vector3();
 
     this._bindEvents();
   }
@@ -62,12 +65,12 @@ export class ThirdPersonCamera {
     // 球坐标围绕目标
     const sinPitch = Math.sin(this.pitch);
     const cosPitch = Math.cos(this.pitch);
-    const offset = new THREE.Vector3(
+    this._offset.set(
       Math.sin(this.yaw) * cosPitch * this.distance,
       sinPitch * this.distance + this.height,
       Math.cos(this.yaw) * cosPitch * this.distance
     );
-    return this._targetPos.clone().add(offset);
+    return this._desiredPos.copy(this._targetPos).add(this._offset);
   }
 
   update(target) {
@@ -86,8 +89,9 @@ export class ThirdPersonCamera {
 
   /** 当前参数下相机应有的位姿（供地图模式退出动画衔接） */
   pose(target) {
+    // 调用频率很低（仅地图退出衔接），拷出独立向量避免与每帧复用的缓存别名
     const pos = this._desired(target);
-    return { pos, look: this._targetPos.clone() };
+    return { pos: pos.clone(), look: this._targetPos.clone() };
   }
 
   /**

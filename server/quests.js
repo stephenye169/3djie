@@ -170,7 +170,7 @@ router.post('/quests/walked', authMiddleware, (req, res) => {
   const now = Date.now();
   // 节流：前端可能频繁上报，累加后直接塞给 questProgress 即可（它有 min 上限）
   if (now - lastWalkTs < 200) {
-    return res.json({ ok: true, throttled: true });
+    return res.json({ ok: true, throttled: true, quests: questsFor(req.user.id) });
   }
   lastWalkTs = now;
 
@@ -180,7 +180,8 @@ router.post('/quests/walked', authMiddleware, (req, res) => {
   }
 
   questProgress(req.user.id, QUEST_WALK, meters);
-  res.json({ ok: true });
+  // 回传最新任务面板：前端只需回填 quests，不必再拉一次整包 /api/game/state
+  res.json({ ok: true, quests: questsFor(req.user.id) });
 });
 
 export default router;

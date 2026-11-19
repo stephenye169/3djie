@@ -3734,3 +3734,67 @@ body.attack-shake canvas {
 .wallet-use-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .wallet-row:has(.wallet-use-btn) .wallet-resell-btn { margin-left: 6px; }
 .wallet-tag { font-style: normal; font-size: 10px; color: #94a3b8; }
+
+/* buff 条内嵌倒计时进度条 */
+.buff-chip { display: inline-flex; align-items: center; gap: 6px; }
+.buff-track {
+  width: 56px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  display: inline-block;
+}
+.buff-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ffd24a, #f5d0a9);
+  transition: width 0.25s linear;
+}
+
+/* ============ 体能条（左下角 HUD）============ */
+#stamina-hud {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  width: 200px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  z-index: 70;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.stamina-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.stamina-track {
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+#stamina-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #4ade80, #86efac);
+  transition: width 0.25s linear, background 0.3s;
+}
+#stamina-fill[data-level='warn'] {
+  background: linear-gradient(90deg, #facc15, #fde047);
+}
+#stamina-fill[data-level='danger'] {
+  background: linear-gradient(90deg, #f87171, #fca5a5);
+  animation: stamina-blink 0.9s ease-in-out infinite;
+}
+@keyframes stamina-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}

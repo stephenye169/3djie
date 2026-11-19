@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 游戏数值与收购接口
  *
  * 路由：
@@ -16,7 +16,7 @@ import express from 'express';
 import { query, run, randomId, addBalance, deductBalance } from './db.js';
 import { authMiddleware } from './auth.js';
 import { broadcastBattle } from './chat.js';
-import { listOwned, settle, syncDerived, activeBuffs } from './economy.js';
+import { listOwned, settle, syncDerived, activeBuffDetails } from './economy.js';
 import { createAttack, defend, surrender, incomingAttack, pendingForShop, shopCooldowns, TIER1_PROTECT_MS, isNewPlayer } from './capital.js';
 import { dividendStatus } from './treasure.js';
 import { questsFor } from './quests.js';
@@ -70,7 +70,7 @@ function unlockStatus(asset, stock, ownedCount) {
 /** 组装给前端的完整状态 */
 function buildState(userId) {
   const user = query(
-    `SELECT id, nickname, balance, title, income_per_sec, total_earned,
+    `SELECT id, nickname, balance, title, income_per_sec, total_earned, stamina,
             rebirth_count, black_card_points, talents_json
      FROM users WHERE id = ?`,
     [userId]
@@ -84,7 +84,7 @@ function buildState(userId) {
   const cooldowns = shopCooldowns(ASSETS.map((a) => a.id));
   const newbieCache = new Map();
   const stock = permitStock(userId);
-  const buffs = activeBuffs(userId);
+  const buffs = activeBuffDetails(userId);
 
   const incoming = incomingAttack(userId);
   const talents = JSON.parse(user.talents_json || '{}');
@@ -145,6 +145,7 @@ function buildState(userId) {
       incomePerSec: income,
       totalEarned: Math.floor(user.total_earned),
       rebirthCount: user.rebirth_count,
+      stamina: Math.round(Number(user.stamina) || 0),
       blackCardPoints: user.black_card_points,
       talents,
     },

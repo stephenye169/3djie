@@ -13,15 +13,36 @@ export function listOwned(userId) {
   );
 }
 
-/** 活跃 buff：读取 buffs_json 过滤过期，按类型取最晚到期（game.js / treasure.js / economy.js 共用） */
+/** 活跃 buff：读取 buffs_json 过滤过期，按类型取最晚到期（game.js / treasure.js / economy.js 共用）
+ *  返回 {type: until 绝对到期时间戳}——只做存在性/时效判断 */
 export function activeBuffs(userId) {
   const row = query('SELECT buffs_json FROM users WHERE id = ?', [userId])[0];
   let raw = {};
   try { raw = JSON.parse(row?.buffs_json || '{}'); } catch { raw = {}; }
   const now = Date.now();
   const out = {};
-  for (const [type, until] of Object.entries(raw)) {
-    if (Number(until) > now) out[type] = Number(until);
+  for (const [type, v] of Object.entries(raw)) {
+    const until = typeof v === 'object' && v ? Number(v.until) : Number(v);
+    if (until > now) out[type] = until;
+  }
+  return out;
+}
+
+/** 活跃 buff 详情：{type: {until, total 总时长 ms}}——供前端进度条渲染；旧格式 total = null */
+export function activeBuffDetails(userId) {
+  const row = query('SELECT buffs_json FROM users WHERE id = ?', [userId])[0];
+  let raw = {};
+  try { raw = JSON.parse(row?.buffs_json || '{}'); } catch { raw = {}; }
+  const now = Date.now();
+  const out = {};
+  for (const [type, v] of Object.entries(raw)) {
+    if (typeof v === 'object' && v) {
+      const until = Number(v.until);
+      if (until > now) out[type] = { until, total: Number(v.total) || null };
+    } else {
+      const until = Number(v);
+      if (until > now) out[type] = { until, total: null }; // 旧格式无总时长，前端降级纯秒数
+    }
   }
   return out;
 }

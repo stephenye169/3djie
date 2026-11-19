@@ -12,6 +12,19 @@ export const OFFLINE_CAP_MS = 24 * 60 * 60 * 1000; // 离线收益最多结算 2
 export const PRESTIGE_THRESHOLD = 5e10; // 资本轮回门槛：500 亿（约等于买下一家黄金店）
 export const TELEPORT_COST = 100_000;   // 地图点击传送费用：¥10 万/次
 
+/* ============ 体能系统（步行消耗 → 低体能无法拾取 → 买食品恢复） ============
+ * 满值 100；普通行走微耗、冲刺重耗（赶路抢金币 vs 省体能的取舍）；
+ * 体能 < 20 时无法捡金币/宝箱/客源金币，且禁止冲刺（防死锁：没钱没体能也能走到餐饮店门口），
+ * 站立每 3 秒 +1 点作为没钱时的保底回能；主要回能途径 = 到餐饮店买食品（daily，买后立即恢复）
+ */
+export const STAMINA_MAX = 100;        // 体能上限
+export const STAMINA_WALK_DRAIN = 0.5;   // 普通行走每秒消耗（每 2 秒 1 点）
+export const STAMINA_SPRINT_DRAIN = 2;   // 冲刺奔跑每秒消耗（Shift）
+export const STAMINA_IDLE_REGEN = 1 / 3; // 站立保底恢复（每 3 秒 1 点）
+export const STAMINA_PICK_MIN = 20;      // 拾取金币所需最低体能（低于此值同时禁止冲刺）
+export const STAMINA_HINT_COOLDOWN_MS = 2000; // 低体能提示节流（每 2 秒最多一次，防刷屏）
+export const STAMINA_REPORT_INTERVAL_MS = 5000; // 客户端上报周期
+
 /** 店内消费 → 店铺经济闭环（进货转售版）：
  *  - 玩家在店内买商品（标价 P，可被优惠券抵扣）→ 实付计入店铺流水 flow_total
  *  - 店铺有收购人时，每笔实付的 10% 实时分给收购人（自己买自己店不抽成）

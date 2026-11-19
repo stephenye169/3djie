@@ -24,6 +24,7 @@ export class Player {
     this.height = 1.8;
     this.speed = 6;
     this.speedMult = 1; // 健步如飞 buff 倍率（main.js 由 gameStore buffs 驱动）
+    this.sprintBlocked = false; // 体能不足时禁止冲刺（main.js 驱动，防没钱没体能卡死）
     this.sprintSpeed = 12; // Shift 加速奔跑速度
     this.jumpSpeed = 7;
     this.gravity = -18;
@@ -352,7 +353,9 @@ export class Player {
 
     if (moveDir.lengthSq() > 0) {
       moveDir.normalize();
-      const curSpeed = (input.sprint ? this.sprintSpeed : this.speed) * this.speedMult;
+      // 体能不足（sprintBlocked）时 Shift 冲刺失效，只保留普通速度——保底走到餐饮店门口
+      const sprinting = input.sprint && !this.sprintBlocked;
+      const curSpeed = (sprinting ? this.sprintSpeed : this.speed) * this.speedMult;
       this.velocity.x = moveDir.x * curSpeed;
       this.velocity.z = moveDir.z * curSpeed;
       // 角色朝向移动方向
@@ -365,14 +368,7 @@ export class Player {
 
     // 走路动画：移动时四肢前后摆动（奔跑时更快），静止时平滑回正
     const moving = moveDir.lengthSq() > 0;
-    if (moving) this._walkPhase += dt * (input.sprint ? 13 : 9);
-    const swing = moving ? Math.sin(this._walkPhase) * 0.55 : 0;
-    const ease = Math.min(1, dt * 12);
-    const limbs = this._parts;
-    limbs.legL.rotation.x += (swing - limbs.legL.rotation.x) * ease;
-    limbs.legR.rotation.x += (-swing - limbs.legR.rotation.x) * ease;
-    limbs.armL.rotation.x += (-swing * 0.85 - limbs.armL.rotation.x) * ease;
-    limbs.armR.rotation.x += (swing * 0.85 - limbs.armR.rotation.x) * ease;
+    this._applySwing(dt, moving, input.sprint);
 
     // 跳跃
     if (input.jump && this.onGround) {
@@ -426,6 +422,26 @@ export class Player {
         this.velocity.z = 0;
       }
     }
+  }
+
+  /** 四肢摆动（本地玩家与远端玩家共用，保证动作观感一致） */
+  _applySwing(dt, moving, sprinting) {
+    if (moving) this._walkPhase += dt * (sprinting ? 13 : 9);
+    const swing = moving ? Math.sin(this._walkPhase) * 0.55 : 0;
+    const ease = Math.min(1, dt * 12);
+    const limbs = this._parts;
+    limbs.legL.rotation.x += (swing - limbs.legL.rotation.x) * ease;
+    limbs.legR.rotation.x += (-swing - limbs.legR.rotation.x) * ease;
+    limbs.armL.rotation.x += (-swing * 0.85 - limbs.armL.rotation.x) * ease;
+    limbs.armR.rotation.x += (swing * 0.85 - limbs.armR.rotation.x) * ease;
+  }
+
+  /**
+   * 远端玩家动画：按服务端下发的移动状态摆手摆腿。
+   * 不跑物理/碰撞（远端位置完全由插值决定）。
+   */
+  updateRemoteAnimation(dt, moving, sprinting) {
+    this._applySwing(Math.min(dt, 0.05), !!moving, !!sprinting);
   }
 
   /** 位置是否落在任一可行走矩形内（矩形按碰撞半径收缩） */
