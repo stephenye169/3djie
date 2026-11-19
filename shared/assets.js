@@ -12,12 +12,76 @@ export const OFFLINE_CAP_MS = 24 * 60 * 60 * 1000; // 离线收益最多结算 2
 export const PRESTIGE_THRESHOLD = 5e10; // 资本轮回门槛：500 亿（约等于买下一家黄金店）
 export const TELEPORT_COST = 100_000;   // 地图点击传送费用：¥10 万/次
 
+/** 店内消费 → 店铺经济闭环（进货转售版）：
+ *  - 玩家在店内买商品（标价 P，可被优惠券抵扣）→ 实付计入店铺流水 flow_total
+ *  - 店铺有收购人时，每笔实付的 10% 实时分给收购人（自己买自己店不抽成）
+ *  - 已购商品可「转售」给街面：回收价 = 标价 × 85%~110% 随机，差价归玩家
+ *  - 店铺流水达档后店门口刷「客源金币」：任何人捡到，收购人按档位分成 */
+export const SHOP_ROYALTY_RATE = 0.10;                       // 店主抽成比例
+export const SHOP_RESELL_RATE_MIN = 0.85;                    // 转售回收率下限
+export const SHOP_RESELL_RATE_MAX = 1.10;                    // 转售回收率上限
+export const SHOP_FLOW_TIERS = [10_000, 100_000, 1_000_000]; // 流水档位（累计实付）
+export const SHOP_FLOW_SHARE = [0.30, 0.50, 0.80];           // 各档客源金币给店主的分成
+export const SHOP_FLOW_COIN_BASE = 5_000;                    // 客源金币基础面额
+
+/** 店铺流水档位：返回 { index 0-2, share, next }；未达档 index = -1 */
+export function shopFlowTier(flowTotal) {
+  const flow = Number(flowTotal) || 0;
+  let index = -1;
+  for (let i = 0; i < SHOP_FLOW_TIERS.length; i++) {
+    if (flow >= SHOP_FLOW_TIERS[i]) index = i;
+  }
+  return {
+    index,
+    share: index >= 0 ? SHOP_FLOW_SHARE[index] : 0,
+    next: index >= SHOP_FLOW_TIERS.length - 1 ? null : SHOP_FLOW_TIERS[index + 1],
+  };
+}
+
 /** 资产分级：决定前端色带与文案 */
 export const TIERS = {
   1: { name: '普通店铺', label: '第一幕' },
   2: { name: '精品店铺', label: '第二幕' },
-  3: { name: '精品店铺', label: '第三幕' },
+  3: { name: '高级店铺', label: '第三幕' },
   4: { name: '黄金店铺', label: '第四幕' },
+};
+
+/* ============ 商品经济体系（三类商品 × 分级收购门槛） ============
+ * 商品 kind 三类：
+ *   daily  日常消费——临时增益（移动速度/金币暴击/拾取半径，60~120s）
+ *   boost  功能商品——长效增益（收租收益/金币金额，10 分钟）
+ *   permit 收购资格——材料商品，收购 tier≥2 店铺时按清单消耗
+ * 玩家循环：赚金币 → 买商品获得能力/凑资格 → 收购高级店铺 → 赚更多金币
+ */
+export const PRODUCT_KINDS = {
+  daily: { name: '日常消费', icon: '🥤', desc: '临时增益（1~2 分钟）' },
+  boost: { name: '功能商品', icon: '⚡', desc: '长效增益（10 分钟）' },
+  permit: { name: '收购资格', icon: '📜', desc: '收购高级店铺的必需材料' },
+};
+
+/** buff 定义：type → { name, icon, mult 倍率 }；时长由商品 buff 字段携带 */
+export const BUFF_TYPES = {
+  speed: { name: '健步如飞', icon: '👟', mult: 1.35, desc: '移动速度 +35%' },
+  crit: { name: '财运暴击', icon: '✨', mult: 0.12, desc: '金币雨暴击率 +12%', additive: true },
+  magnet: { name: '吸金磁铁', icon: '🧲', mult: 1.6, desc: '拾取半径 +60%' },
+  income: { name: '日进斗金', icon: '📈', mult: 1.25, desc: '收租收益 +25%' },
+  coinUp: { name: '点石成金', icon: '💰', mult: 1.30, desc: '拾取金币金额 +30%' },
+};
+
+/** 分级收购门槛：tier → 需要的 permit 商品清单 / 玩家持有店铺数 */
+export const ACQUIRE_PERMITS = {
+  2: ['商业许可证', '街区信誉章'],
+  3: ['商业许可证', '街区信誉章', '税务合规书', '装修图纸'],
+  4: ['商业许可证', '街区信誉章', '税务合规书', '装修图纸'],
+};
+export const ACQUIRE_RARE = { 4: '黑胶唱片' };       // 黄金店铺额外稀有材料
+export const ACQUIRE_MIN_SHOPS = { 4: 3 };            // 黄金店铺要求持有店铺数（玩家等级门槛）
+export const SHOPS_PERMIT_SOURCE = {
+  '商业许可证': 'finance',
+  '街区信誉章': 'bookstore',
+  '税务合规书': 'lihetang',
+  '装修图纸': 'memory',
+  '黑胶唱片': 'zhaoyuanren',
 };
 
 /**

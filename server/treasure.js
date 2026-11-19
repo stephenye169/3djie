@@ -10,9 +10,9 @@
 import express from 'express';
 import { query, run, randomId } from './db.js';
 import { authMiddleware } from './auth.js';
-import { settle } from './economy.js';
+import { settle, activeBuffs } from './economy.js';
 import { broadcastBattle } from './chat.js';
-import { formatMoney } from '../shared/assets.js';
+import { formatMoney, shopFlowTier, BUFF_TYPES } from '../shared/assets.js';
 import {
   talentLevelOf, goldHandCritRate, goldHandCritReward, idleRentFactor,
 } from '../shared/prestige.js';
@@ -105,9 +105,11 @@ export function dividendStatus(userId) {
   };
 }
 
-/** 拾取金币 / 金币箱 */
+/** 拾取金币 / 金币箱 / 客源金币 */
 router.post('/collect', authMiddleware, (req, res) => {
-  const type = req.body?.type === 'box' ? 'box' : 'coin';
+  const rawType = String(req.body?.type || 'coin');
+  const type = rawType === 'box' ? 'box' : rawType === 'shopflow' ? 'shopflow' : 'coin';
+  const shopId = type === 'shopflow' ? String(req.body?.shopId || '') : '';
   settle(req.user.id);
 
   const row = query(
@@ -118,6 +120,7 @@ router.post('/collect', authMiddleware, (req, res) => {
 
   const now = Date.now();
   const last = Number(type === 'box' ? row.last_box_at : row.last_coin_at) || 0;
+  // 客源金币复用普通金币的冷却列：拾取节奏与金币雨一致，防止连点扫街
   const gap = type === 'box' ? BOX_GAP_MS : COIN_GAP_MS;
   if (now - last < gap) {
     return res.status(429).json({
@@ -128,13 +131,34 @@ router.post('/collect', authMiddleware, (req, res) => {
 
   let reward;
   let crit = false;
-  if (type === 'box') {
+  let royalty = 0;
+  let royaltyTo = null;
+  let flowIndex = -1;
+  const buffs = activeBuffs(req.user.id);
+  if (type === 'shopflow') {
+    // 客源金币：店铺流水达档后门口刷新，拾取者拿全额，店铺收购人按档位分成
+    const shop = query('SELECT flow_total FROM shops WHERE id = ?', [shopId])[0];
+    if (!shop) return res.status(404).json({ error: '店铺不存在' });
+    const t = shopFlowTier(shop.flow_total);
+    if (t.index < 0) return res.status(409).json({ error: '这家店还没攒够客流，暂无客源金币' });
+    flowIndex = t.index;
+    reward = randomInt(20_000, 80_000) * (t.index + 1);
+    if (buffs.coinUp) reward = Math.round(reward * BUFF_TYPES.coinUp.mult);
+    const ownerRow = query('SELECT user_id FROM player_shops WHERE shop_id = ? LIMIT 1', [shopId])[0];
+    if (ownerRow && ownerRow.user_id && ownerRow.user_id !== req.user.id) {
+      royalty = Math.floor(reward * t.share);
+      royaltyTo = ownerRow.user_id;
+    }
+  } else if (type === 'box') {
     reward = randomInt(800_000, 2_000_000);
+    if (buffs.coinUp) reward = Math.round(reward * BUFF_TYPES.coinUp.mult);
   } else {
-    // 点金手天赋：暴击率与暴击金额随等级提升
+    // 点金手天赋：暴击率与暴击金额随等级提升；财运暴击 buff 提升暴击率
     const goldLv = talentLevelOf(talentsOf(req.user.id), 'goldHand');
-    crit = Math.random() < goldHandCritRate(goldLv);
+    const critBonus = buffs.crit ? BUFF_TYPES.crit.mult : 0;
+    crit = Math.random() < goldHandCritRate(goldLv) + critBonus;
     reward = crit ? goldHandCritReward(goldLv) : randomInt(20_000, 80_000);
+    if (buffs.coinUp) reward = Math.round(reward * BUFF_TYPES.coinUp.mult);
   }
 
   const col = type === 'box' ? 'last_box_at' : 'last_coin_at';
@@ -142,6 +166,14 @@ router.post('/collect', authMiddleware, (req, res) => {
     `UPDATE users SET balance = balance + ?, ${col} = ? WHERE id = ?`,
     [reward, now, req.user.id]
   );
+
+  // 店主分成实时入账
+  if (royalty > 0 && royaltyTo) {
+    run(
+      'UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?',
+      [royalty, royalty, royaltyTo]
+    );
+  }
 
   // 大额和金币箱上全服战报，制造「别人在爆金币」的围观感
   if (type === 'box' || crit) {
@@ -155,7 +187,12 @@ router.post('/collect', authMiddleware, (req, res) => {
   }
   if (type === 'box') quest(req.user.id, QUEST_COIN_BOX, 1);
 
-  res.json({ ok: true, type, reward, crit, balance: balanceOf(req.user.id) });
+  res.json({
+    ok: true, type, reward, crit, balance: balanceOf(req.user.id),
+    shopId: type === 'shopflow' ? shopId : undefined,
+    flowIndex: type === 'shopflow' ? flowIndex : undefined,
+    royalty: type === 'shopflow' ? royalty : undefined,
+  });
 });
 
 /** 碰瓷 NPC：打脸成功后爆金币 */

@@ -87,6 +87,7 @@ class GameStore {
       totalAssets: this.state.totalAssets,
       nextTitle: this.state.nextTitle,
       assets: this.state.assets,
+      buffs: this.state.buffs || {},
       dividendPending,
       dividendRate: divRate,
       dividendSynergy: this.state.dividend?.synergyPct ?? 0,
@@ -245,15 +246,24 @@ class GameStore {
     this._emit();
   }
 
-  /** 拾取街道金币 / 财阀金币箱（金额由服务端决定） */
-  async collect(type = 'coin') {
+  /** 拾取街道金币 / 财阀金币箱 / 客源金币（金额由服务端决定） */
+  async collect(type = 'coin', shopId = null) {
     try {
-      const res = await api.collect(type);
+      const res = type === 'shopflow'
+        ? await api.collectShopFlow(shopId)
+        : await api.collect(type);
       this.patchBalance(res.balance);
-      return { ok: true, reward: res.reward, crit: res.crit, type: res.type };
+      return { ok: true, reward: res.reward, crit: res.crit, type: res.type, royalty: res.royalty };
     } catch (err) {
       return { ok: false, message: err.message, status: err.status };
     }
+  }
+
+  /** 购买增益商品后本地立即合入 buff（服务端 buffs_json 已写入，免整包刷新） */
+  patchBuffs(type, until) {
+    if (!this.state || !type || !until) return;
+    this.state.buffs = { ...(this.state.buffs || {}), [type]: until };
+    this._emit();
   }
 
   /** 碰瓷 NPC：用钞能力当场羞辱 */

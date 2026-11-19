@@ -57,18 +57,17 @@
     <div class="wallet-modal">
       <button id="wallet-close" class="wallet-close" title="关闭">×</button>
       <div class="wallet-title">个人中心</div>
-      <div id="wallet-panel-balance" class="wallet-balance-big">¥500</div>
-      <div id="wallet-panel-spent" class="wallet-spent">已消费 ¥0</div>
+      <div id="wallet-panel-balance" class="wallet-balance-big">¥0</div>
+      <div id="wallet-panel-spent" class="wallet-spent">消费记录来自服务端账本</div>
 
-      <div class="wallet-section-label">快捷充值</div>
-      <div class="wallet-actions">
-        <button class="wallet-action" data-recharge="100">+ ¥100</button>
-        <button class="wallet-action" data-recharge="500">+ ¥500</button>
-        <button id="wallet-reset" class="wallet-action ghost">重置为 ¥500</button>
-      </div>
+      <div class="wallet-section-label">我的背包（进货 · 可转售给街面游客）</div>
+      <div id="wallet-inventory" class="wallet-list"></div>
 
-      <div class="wallet-section-label">已购商品</div>
+      <div class="wallet-section-label">购物订单（最近 20 条）</div>
       <div id="wallet-panel-list" class="wallet-list"></div>
+
+      <div class="wallet-section-label">可用优惠券（打脸 NPC 获得 · 下单自动 9 折）</div>
+      <div id="wallet-coupons" class="wallet-list"></div>
     </div>
   </div>
 
@@ -110,25 +109,15 @@
         <span class="wallet-icon">💰</span>
         <span id="wallet-balance">¥500</span>
       </div>
-      <button id="exit-game" class="exit-btn-top" title="退出游戏">退出</button>
-      <div class="nav-badge">DEMO</div>
-    </div>
-      <div class="online-chip" id="online-chip" title="当前在线人数">
-        <span class="online-live-dot"></span>
-        <span id="online-count">0</span>&nbsp;人在线
-      </div>
-      <div class="wallet-chip" id="wallet-chip" title="我的余额">
-        <span class="wallet-icon">💰</span>
-        <span id="wallet-balance">¥500</span>
-      </div>
       <button class="notify-chip" id="notify-chip" title="切到后台时，店铺被踢馆会弹系统通知（点击开启）">
         <span class="notify-icon">🔔</span>
         <span id="notify-label">护盘提醒</span>
       </button>
       <button id="exit-game" class="exit-btn-top" title="退出游戏">退出</button>
-      <div class="nav-badge">DEMO</div>
     </div>
   </header>
+  <!-- 商品增益状态条：buff 生效期间显示剩余时间 -->
+  <div id="buff-bar" class="buff-bar hidden"></div>
 
   <!-- 系统公告（顶栏公告条） -->
   <div id="notice-bar" class="notice-bar hidden">

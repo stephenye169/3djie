@@ -165,6 +165,15 @@ export const api = {
   },
   // 商品交易：我的订单记录 + 可用优惠券
   myOrders: () => http('GET', '/api/orders/my'),
+  // 进货转售：我的库存（已购未转售）
+  inventory: () => http('GET', '/api/inventory'),
+  resell: (product_id, qty = 1) => http('POST', '/api/orders/resell', { product_id, qty }),
+  // 店铺消费流水与档位（进度条展示）
+  shopFlow: (shopId) => http('GET', `/api/shops/${shopId}/flow`),
+  // 达流水档位的店铺列表（客源金币刷新点）
+  flowTiers: () => http('GET', '/api/shops/flowtiers'),
+  // 客源金币（店铺流水档位奖励，拾取者得全额、店主按档分成）
+  collectShopFlow: (shopId) => http('POST', '/api/game/collect', { type: 'shopflow', shopId }),
   // 街区众筹扩建 + 股份分红
   crowdList: () => http('GET', '/api/crowd/list'),
   crowdCreate: (assetId) => http('POST', '/api/crowd/create', { assetId }),

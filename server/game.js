@@ -16,13 +16,14 @@ import express from 'express';
 import { query, run, randomId, addBalance, deductBalance } from './db.js';
 import { authMiddleware } from './auth.js';
 import { broadcastBattle } from './chat.js';
-import { listOwned, settle, syncDerived } from './economy.js';
+import { listOwned, settle, syncDerived, activeBuffs } from './economy.js';
 import { createAttack, defend, surrender, incomingAttack, pendingForShop, shopCooldowns, TIER1_PROTECT_MS, isNewPlayer } from './capital.js';
 import { dividendStatus } from './treasure.js';
 import { questsFor } from './quests.js';
 import {
   ASSETS, MAX_LEVEL, PRESTIGE_THRESHOLD, TELEPORT_COST, findAsset, assetValueOf, incomeOf, upgradeCostOf,
   titleFor, nextTitle, formatMoney,
+  ACQUIRE_PERMITS, ACQUIRE_RARE, ACQUIRE_MIN_SHOPS,
 } from '../shared/assets.js';
 import {
   prestigePointsOf, talentLevelOf, dominationFactor,
@@ -41,6 +42,31 @@ function ownerMap() {
   return new Map(rows.map((r) => [r.shop_id, r]));
 }
 
+/** 玩家 permit 库存（按商品名汇总，收购门槛用） */
+function permitStock(userId) {
+  const rows = query(
+    `SELECT p.name, SUM(o.qty) AS s, SUM(o.resold) AS r
+     FROM orders o JOIN products p ON p.id = o.product_id
+     WHERE o.user_id = ? AND p.kind = 'permit'
+     GROUP BY p.name`,
+    [userId]
+  );
+  return new Map(rows.map((r) => [r.name, Math.max(0, Number(r.s) - Number(r.r))]));
+}
+
+/** 某资产的收购门槛检查结果（前端展示 + 服务端校验共用） */
+function unlockStatus(asset, stock, ownedCount) {
+  const permits = ACQUIRE_PERMITS[asset.tier] || [];
+  const rare = ACQUIRE_RARE[asset.tier] || null;
+  const minShops = ACQUIRE_MIN_SHOPS[asset.tier] || 0;
+  const required = [
+    ...permits.map((name) => ({ name, need: 1, have: stock.get(name) || 0 })),
+    ...(rare ? [{ name: rare, need: 1, have: stock.get(rare) || 0 }] : []),
+    ...(minShops ? [{ name: `持有店铺 ≥ ${minShops}`, need: minShops, have: ownedCount, isShop: true }] : []),
+  ];
+  return { required, met: required.every((r) => r.have >= r.need) };
+}
+
 /** 组装给前端的完整状态 */
 function buildState(userId) {
   const user = query(
@@ -57,6 +83,8 @@ function buildState(userId) {
   const ownedMap = new Map(owned.map((s) => [s.shop_id, s]));
   const cooldowns = shopCooldowns(ASSETS.map((a) => a.id));
   const newbieCache = new Map();
+  const stock = permitStock(userId);
+  const buffs = activeBuffs(userId);
 
   const incoming = incomingAttack(userId);
   const talents = JSON.parse(user.talents_json || '{}');
@@ -76,6 +104,10 @@ function buildState(userId) {
       newbie = newbieCache.get(owner.user_id);
     }
     const ownerProtected = protectLeftMs > 0 || !!newbie?.isNew;
+    // 收购门槛（tier≥2 需要 permit 材料 / 黄金店还要稀有材料与持有店铺数）
+    const unlock = !ownedMap.has(asset.id)
+      ? unlockStatus(asset, stock, owned.length)
+      : null;
     return {
       id: asset.id,
       name: asset.name,
@@ -100,6 +132,7 @@ function buildState(userId) {
       ownerProtected,
       ownerProtectedHours: protectLeftMs > 0 ? Math.ceil(protectLeftMs / 3_600_000) : 0,
       ownerProtectedReason: protectLeftMs > 0 ? 'transfer' : (newbie?.isNew ? newbie.reason : null),
+      unlock,
     };
   });
 
@@ -118,6 +151,7 @@ function buildState(userId) {
     ownedCount: owned.length,
     totalAssets: ASSETS.length,
     nextTitle: nextTitle(owned.length),
+    buffs,
     dividend: dividendStatus(userId),
     prestige: {
       totalValue,
@@ -242,6 +276,18 @@ router.post('/acquire', authMiddleware, (req, res) => {
   const row = query('SELECT balance, nickname, talents_json FROM users WHERE id = ?', [req.user.id])[0];
   if (!row) return res.status(404).json({ error: '用户不存在' });
 
+  // 收购门槛：tier≥2 需要 permit 材料组合（收购时消耗），黄金店额外要稀有材料 + 持有店铺数
+  const owned = listOwned(req.user.id);
+  const stock = permitStock(req.user.id);
+  const unlock = unlockStatus(asset, stock, owned.length);
+  if (!unlock.met) {
+    const missing = unlock.required
+      .filter((r) => r.have < r.need)
+      .map((r) => (r.isShop ? `${r.name}（现有 ${r.have}）` : `${r.name} ×${r.need - r.have}`))
+      .join('、');
+    return res.status(409).json({ error: `收购门槛未达成，还缺：${missing}`, unlock });
+  }
+
   // 资本压制天赋：收购价打折（踢馆身价不受影响）
   const price = Math.round(asset.price * dominationFactor(
     talentLevelOf(JSON.parse(row.talents_json || '{}'), 'capitalDomination')
@@ -255,6 +301,28 @@ router.post('/acquire', authMiddleware, (req, res) => {
       short: Math.ceil(Math.max(0, price - curBal)),
     });
   }
+
+  // 消耗收购材料（FIFO 标记 resold，与转售同一套库存机制）
+  const usedPermits = [...(ACQUIRE_PERMITS[asset.tier] || []), ...(ACQUIRE_RARE[asset.tier] ? [ACQUIRE_RARE[asset.tier]] : [])];
+  for (const permitName of usedPermits) {
+    let need = 1;
+    const fifo = query(
+      `SELECT o.id, o.qty, o.resold FROM orders o
+       JOIN products p ON p.id = o.product_id
+       WHERE o.user_id = ? AND p.name = ? AND p.kind = 'permit'
+       ORDER BY o.created_at`,
+      [req.user.id, permitName]
+    );
+    for (const o of fifo) {
+      if (need <= 0) break;
+      const free = Number(o.qty) - Number(o.resold);
+      if (free <= 0) continue;
+      const take = Math.min(free, need);
+      run('UPDATE orders SET resold = resold + ? WHERE id = ?', [take, o.id]);
+      need -= take;
+    }
+  }
+
   run(
     'INSERT INTO player_shops (user_id, shop_id, level, acquired_at) VALUES (?, ?, 1, ?)',
     [req.user.id, assetId, Date.now()]

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+﻿import * as THREE from 'three';
 
 /**
  * 街头金币雨 / 财阀金币箱
@@ -13,8 +13,7 @@ const MAX_COINS = 12;
 const MAX_BOXES = 2;
 const PICK_RADIUS = 2.0;
 const PICK_RADIUS_SQ = PICK_RADIUS * PICK_RADIUS;
-const CLICK_RANGE = 9;
-const COIN_LIFE_MS = 65_000;
+const CLICK_RANGE = 9;const COIN_LIFE_MS = 65_000;
 const RAIN_INTERVAL_MS = [42_000, 75_000];
 
 let glowTexture = null;
@@ -130,6 +129,12 @@ export class CoinRain {
     this.spawnTimer = 0;
     this.nearTimer = 2.5;
     this.rainTimer = 10_000;
+    this.pickRadiusSq = PICK_RADIUS_SQ; // 吸金磁铁 buff 动态调整（setMagnetMult）
+    this.clickRange = CLICK_RANGE;
+    // 客源金币（店铺流水档位奖励）：门口刷新，type='shopflow'
+    this.entrances = [];
+    this.flowShops = [];
+    this.flowTimer = 30;
     this.raycaster = new THREE.Raycaster();
     this.raycaster.camera = camera; // 金币/宝箱含 Sprite 时：Sprite.raycast 需要 raycaster.camera
     this.pointer = new THREE.Vector2();
@@ -138,8 +143,21 @@ export class CoinRain {
     dom.addEventListener('click', this._onClick, true);
   }
 
+  /** 达档店铺列表 [{shopId}]（main.js 定期从 /api/shops/flowtiers 拉取后注入） */
+  setFlowShops(list) {
+    this.flowShops = Array.isArray(list) ? list : [];
+  }
+
   setEnabled(enabled) {
     this.enabled = !!enabled;
+  }
+
+  /** 吸金磁铁 buff：拾取半径倍率（1 = 原始 2m） */
+  setMagnetMult(mult) {
+    const m = Math.max(1, Number(mult) || 1);
+    const r = PICK_RADIUS * m;
+    this.pickRadiusSq = r * r;
+    this.clickRange = CLICK_RANGE * m;
   }
 
   _xRange() {
@@ -170,7 +188,7 @@ export class CoinRain {
     return spot;
   }
 
-  _addEntry(type, spot, { falling = false, height = 0 } = {}) {
+  _addEntry(type, spot, { falling = false, height = 0, shopId = null } = {}) {
     const mesh = type === 'box' ? makeBoxMesh() : makeCoinMesh();
     const hoverY = this.groundY + (type === 'box' ? 0.42 : 0.85);
     const startY = falling ? this.groundY + height : hoverY;
@@ -181,6 +199,7 @@ export class CoinRain {
 
     const entry = {
       type,
+      shopId,
       mesh,
       hoverY,
       baseY: startY,
@@ -194,6 +213,17 @@ export class CoinRain {
     mesh.userData.entry = entry;
     this.entries.push(entry);
     return entry;
+  }
+
+  /** 客源金币：达档店铺门口刷新，走近拾取（拾取者得全额、店主按档位分成） */
+  spawnShopFlowCoin() {
+    if (!this.flowShops.length || !this.entrances.length) return null;
+    const shop = this.flowShops[Math.floor(Math.random() * this.flowShops.length)];
+    const entrance = this.entrances.find((e) => e.shopId === shop.shopId);
+    if (!entrance) return null;
+    const [minX, maxX] = this._xRange();
+    const x = Math.min(maxX, Math.max(minX, entrance.x + (Math.random() * 2 - 1) * 1.2));
+    return this._addEntry('shopflow', { x, z: entrance.z }, {});
   }
 
   _count(type) {
@@ -275,7 +305,7 @@ export class CoinRain {
     if (!entry || entry.claimed) return;
     entry.claimed = true;
     // 服务端冷却拒绝时，把金币留在原地，避免玩家白丢钱
-    const ok = await this.onCollect(entry.type);
+    const ok = await this.onCollect(entry.type, entry);
     if (!ok) {
       entry.claimed = false;
       entry.retryAt = performance.now() + 800;
@@ -308,7 +338,7 @@ export class CoinRain {
 
     const dx = entry.mesh.position.x - this.player.position.x;
     const dz = entry.mesh.position.z - this.player.position.z;
-    if (Math.hypot(dx, dz) > CLICK_RANGE) return;
+    if (Math.hypot(dx, dz) > this.clickRange) return;
 
     e.stopPropagation();
     e.preventDefault();
@@ -339,6 +369,15 @@ export class CoinRain {
         this.nearTimer = 8 + Math.random() * 5;
         this.spawnNearPlayer();
       }
+
+      // 客源金币：25~45s 在某个达档店铺门口刷一枚
+      if (this.flowShops.length && this.entrances.length) {
+        this.flowTimer -= dt;
+        if (this.flowTimer <= 0) {
+          this.flowTimer = 25 + Math.random() * 20;
+          if (this._count('shopflow') < 3) this.spawnShopFlowCoin();
+        }
+      }
     }
 
     const now = performance.now();
@@ -359,7 +398,7 @@ export class CoinRain {
       }
 
       mesh.rotation.y += dt * entry.spin;
-      if (entry.type === 'coin') {
+      if (entry.type !== 'box') {
         mesh.rotation.x = Math.sin(this.time * 1.8 + entry.phase) * 0.35;
       }
 
@@ -373,7 +412,7 @@ export class CoinRain {
       if (entry.retryAt && now < entry.retryAt) continue;
       const dx = mesh.position.x - this.player.position.x;
       const dz = mesh.position.z - this.player.position.z;
-      if (dx * dx + dz * dz <= PICK_RADIUS_SQ) this._collect(entry);
+      if (dx * dx + dz * dz <= this.pickRadiusSq) this._collect(entry);
     }
   }
 

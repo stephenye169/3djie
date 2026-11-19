@@ -194,6 +194,31 @@ export class MapView {
     }
   }
 
+  /** 俯瞰相机目标位姿：注视中心上方，向南偏移形成斜俯视 */
+  _destPos() {
+    return new THREE.Vector3(this.center.x, this.height, this.center.z + this.height * 0.55);
+  }
+
+  /** 俯瞰中心夹取在街道可行走包络内（拖拽平移不跑出地图） */
+  _clampCenter() {
+    const b = STREET.bounds;
+    this.center.x = Math.max(b.minX, Math.min(b.maxX, this.center.x));
+    this.center.z = Math.max(b.minZ, Math.min(b.maxZ, this.center.z));
+  }
+
+  /** 启动相机补间（进入/退出/飞店共用）；fromPos/fromLook 缺省取当前相机位姿 */
+  _startAnim(dur, toPos, toLook, done, fromPos, fromLook) {
+    this.anim = {
+      t: 0,
+      dur,
+      fromPos: (fromPos || this.camera.position).clone(),
+      fromLook: (fromLook || this._look).clone(),
+      toPos: toPos.clone(),
+      toLook: toLook.clone(),
+      done,
+    };
+  }
+
   update(dt) {
     if (!this.active) return;
     this.time += dt;

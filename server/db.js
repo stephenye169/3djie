@@ -191,7 +191,9 @@ async function _init() {
       shop_id     TEXT NOT NULL,
       name        TEXT NOT NULL,
       price       INTEGER NOT NULL,
-      sort_order  INTEGER NOT NULL DEFAULT 0
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      kind        TEXT NOT NULL DEFAULT 'daily',
+      buff        TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS orders (
       id          TEXT PRIMARY KEY,
@@ -315,8 +317,12 @@ async function _init() {
   registerShutdownHooks();
   _migrateV1();   // 老库补 chat_banned 字段（幂等，跑过一次后再跑也是 no-op）
   _grantStartupCapital(); // 必须在 _migrateV2 之前：靠 last_tick 列是否存在判断是否首发
+
   _migrateV2();   // 老库补游戏数值字段（幂等）
+
   _migrateV3();   // 老库补金币拾取 / 家族分红时间戳（幂等）
+
+  _migrateV4();   // 店铺消费流水 / 订单转售字段（幂等）
   _seedShops();
   await _seedAdmin();
   _seedAnnouncements();
@@ -580,14 +586,14 @@ function _seedShops() {
     ['finance', '西入口金融中心','金融总部','🏙','整条街的资金流水都从这里过'],
   ];
   const layouts = {
-    cafe: { layout_z: -100, side:  1 },
-    bakery: { layout_z: -112, side:  1 },
+    cafe: { layout_z: -321, side:  1 },
+    bakery: { layout_z: -352, side:  1 },
     bookstore:{ layout_z: -214, side:  1 },
-    flower: { layout_z:  -60, side: -1 },
+    flower: { layout_z: -318, side: -1 },
     tech: { layout_z: -440, side:  1 },
-    wonton: { layout_z: -24, side:  1 },
-    teahouse: { layout_z: -42, side: -1 },
-    dessert: { layout_z: -58, side:  1 },
+    wonton: { layout_z: -293, side:  1 },
+    teahouse: { layout_z: -150, side: -1 },
+    dessert: { layout_z: -262, side:  1 },
     milktea: { layout_z: -12, side:  1 },
     chenghuang: { layout_z: -45, side:  1 },
     memory: { layout_z: -72, side:  1 },
@@ -610,35 +616,88 @@ function _seedShops() {
     );
   }
 
-  // 商品种子同样按店铺补缺（老库已有商品的店铺跳过）
+  // 商品种子：三类商品体系（daily 日常临时增益 / boost 功能长效增益 / permit 收购资格材料）。
+  // buff 编码 'type:ms:mult'；老库已有商品按名称映射补 kind/buff，新商品（permit 等）追加插入
   const productSeed = [
-    ['cafe', '美式咖啡', 18, 1], ['cafe', '拿铁', 22, 2],
-    ['bakery', '可颂', 8, 1], ['bakery', '麻薯一盒', 15, 2],
-    ['bookstore', '青果巷志', 48, 1],
-    ['flower', '向日葵一束', 35, 1],
-    ['tech', '耳机', 199, 1],
-    ['wonton', '鲜肉小馄饨', 12, 1], ['wonton', '大排面', 22, 2],
-    ['teahouse', '雨前绿茶', 48, 1], ['teahouse', '茶点拼盘', 28, 2],
-    ['dessert', '桂花糖芋苗', 15, 1], ['dessert', '藕粉圆子', 18, 2],
-    ['milktea', '黑糖珍珠鲜奶', 15, 1], ['milktea', '桂花乌龙', 12, 2], ['milktea', '芋泥啵啵', 16, 3],
-    ['chenghuang', '戏楼前排票', 180, 1], ['chenghuang', '戏楼后排票', 80, 2], ['chenghuang', '茶水瓜子', 20, 3],
-    ['memory', '记忆馆门票', 20, 1], ['memory', '青果巷导览手册', 35, 2], ['memory', '明信片一套', 25, 3],
-    ['songjiantang', '松健堂香囊', 45, 1], ['songjiantang', '手抄字帖', 68, 2], ['songjiantang', '旧书一册', 120, 3],
-    ['zhaoyuanren', '故居门票', 25, 1], ['zhaoyuanren', '《教我如何不想她》曲谱', 40, 2], ['zhaoyuanren', '黑胶唱片', 260, 3],
-    ['yunhongyi', '可园门票', 30, 1], ['yunhongyi', '园中茶席', 88, 2], ['yunhongyi', '太湖石摆件', 320, 3],
-    ['baguitang', '八桂堂会席', 1200, 1], ['baguitang', '家宴定制', 8800, 2], ['baguitang', '私募份额', 50000, 3],
-    ['banyuan', '半园茶会', 168, 1], ['banyuan', '桂花酿', 98, 2], ['banyuan', '园林写真', 880, 3],
-    ['lihetang', '会所日票', 600, 1], ['lihetang', '图书借阅卡', 200, 2], ['lihetang', '雪茄吧单次', 380, 3],
-    ['finance', '财富管理咨询', 2000, 1], ['finance', '保险箱年租', 1200, 2], ['finance', '街铺贷月供', 5000, 3],
+    // milktea 东牌坊奶茶铺（tier1 日常）
+    ['milktea', '黑糖珍珠鲜奶', 15, 1, 'daily', 'speed:60000:1.35'],
+    ['milktea', '桂花乌龙', 12, 2, 'daily', 'crit:120000:0.12'],
+    ['milktea', '芋泥啵啵', 16, 3, 'daily', 'magnet:120000:1.6'],
+    // wonton 巷口馄饨铺
+    ['wonton', '鲜肉小馄饨', 12, 1, 'daily', 'magnet:120000:1.6'],
+    ['wonton', '大排面', 22, 2, 'daily', 'speed:60000:1.35'],
+    // cafe 街角咖啡
+    ['cafe', '美式咖啡', 18, 1, 'daily', 'speed:60000:1.35'],
+    ['cafe', '拿铁', 22, 2, 'daily', 'crit:120000:0.12'],
+    ['cafe', '提拉米苏', 32, 3, 'daily', 'magnet:120000:1.6'],
+    // teahouse 青果茶肆
+    ['teahouse', '雨前绿茶', 48, 1, 'boost', 'income:600000:1.25'],
+    ['teahouse', '茶点拼盘', 28, 2, 'daily', 'magnet:120000:1.6'],
+    // bakery 麦香面包房
+    ['bakery', '可颂', 8, 1, 'daily', 'crit:120000:0.12'],
+    ['bakery', '麻薯一盒', 15, 2, 'daily', 'magnet:120000:1.6'],
+    // dessert 糖芋苗小铺
+    ['dessert', '桂花糖芋苗', 15, 1, 'daily', 'crit:120000:0.12'],
+    ['dessert', '藕粉圆子', 18, 2, 'daily', 'magnet:120000:1.6'],
+    // flower 花语花坊
+    ['flower', '向日葵一束', 35, 1, 'daily', 'speed:60000:1.35'],
+    ['flower', '花环礼盒', 68, 2, 'boost', 'coinUp:600000:1.30'],
+    // bookstore 时光书店（tier2：信誉章产地）
+    ['bookstore', '街区信誉章', 680, 1, 'permit', ''],
+    ['bookstore', '经营之道', 88, 2, 'boost', 'income:600000:1.25'],
+    ['bookstore', '青果巷志', 48, 3, 'daily', 'magnet:120000:1.6'],
+    // tech 极客数码（tier2 功能商品）
+    ['tech', '信号增强器', 99, 1, 'boost', 'magnet:600000:1.6'],
+    ['tech', '云算力卡', 159, 2, 'boost', 'coinUp:600000:1.30'],
+    ['tech', '耳机', 199, 3, 'daily', 'speed:60000:1.35'],
+    // chenghuang 城隍庙戏楼（tier2）
+    ['chenghuang', '茶水瓜子', 20, 1, 'daily', 'crit:120000:0.12'],
+    ['chenghuang', '戏楼后排票', 80, 2, 'boost', 'income:600000:1.25'],
+    ['chenghuang', '戏楼前排票', 180, 3, 'boost', 'coinUp:600000:1.30'],
+    // memory 文化记忆馆（tier2：装修图纸产地）
+    ['memory', '装修图纸', 380, 1, 'permit', ''],
+    ['memory', '记忆馆门票', 20, 2, 'daily', 'magnet:120000:1.6'],
+    ['memory', '明信片一套', 25, 3, 'daily', 'crit:120000:0.12'],
+    // songjiantang 松健堂（tier3）
+    ['songjiantang', '松健堂香囊', 45, 1, 'daily', 'speed:60000:1.35'],
+    ['songjiantang', '手抄字帖', 68, 2, 'boost', 'income:600000:1.25'],
+    ['songjiantang', '旧书一册', 120, 3, 'boost', 'coinUp:600000:1.30'],
+    // zhaoyuanren 赵元任故居（tier3：稀有材料产地）
+    ['zhaoyuanren', '《教我如何不想她》曲谱', 40, 1, 'daily', 'crit:120000:0.12'],
+    ['zhaoyuanren', '黑胶唱片', 260, 2, 'permit', ''],
+    ['zhaoyuanren', '故居门票', 25, 3, 'daily', 'magnet:120000:1.6'],
+    // yunhongyi 可园（tier3）
+    ['yunhongyi', '园中茶席', 88, 1, 'boost', 'income:600000:1.25'],
+    ['yunhongyi', '太湖石摆件', 320, 2, 'boost', 'coinUp:600000:1.30'],
+    ['yunhongyi', '可园门票', 30, 3, 'daily', 'magnet:120000:1.6'],
+    // baguitang 八桂堂（tier4）
+    ['baguitang', '八桂堂会席', 1200, 1, 'boost', 'income:600000:1.25'],
+    ['baguitang', '家宴定制', 8800, 2, 'boost', 'coinUp:600000:1.30'],
+    // banyuan 半园（tier4）
+    ['banyuan', '半园茶会', 168, 1, 'boost', 'income:600000:1.25'],
+    ['banyuan', '桂花酿', 98, 2, 'daily', 'speed:60000:1.35'],
+    // lihetang 礼和堂会所（tier4：税务合规书产地）
+    ['lihetang', '税务合规书', 1200, 1, 'permit', ''],
+    ['lihetang', '图书借阅卡', 200, 2, 'daily', 'magnet:120000:1.6'],
+    ['lihetang', '雪茄吧单次', 380, 3, 'daily', 'crit:120000:0.12'],
+    // finance 金融中心（tier4：商业许可证产地）
+    ['finance', '商业许可证', 2000, 1, 'permit', ''],
+    ['finance', '财富管理咨询', 2000, 2, 'boost', 'income:600000:1.25'],
+    ['finance', '保险箱年租', 1200, 3, 'daily', 'magnet:120000:1.6'],
   ];
-  const shopsWithProducts = new Set(
-    query('SELECT DISTINCT shop_id FROM products').map((r) => r.shop_id)
-  );
-  for (const [shopId, name, price, sortOrder] of productSeed) {
-    if (shopsWithProducts.has(shopId)) continue;
+  for (const [shopId, name, price, sortOrder, kind, buff] of productSeed) {
+    const existing = query(
+      'SELECT id FROM products WHERE shop_id = ? AND name = ?',
+      [shopId, name]
+    )[0];
+    if (existing) {
+      // 老库已有同名商品：补 kind/buff（幂等）
+      run('UPDATE products SET kind = ?, buff = ? WHERE id = ?', [kind, buff, existing.id]);
+      continue;
+    }
     run(
-      'INSERT INTO products (id, shop_id, name, price, sort_order) VALUES (?, ?, ?, ?, ?)',
-      [randomId(), shopId, name, price, sortOrder]
+      'INSERT INTO products (id, shop_id, name, price, sort_order, kind, buff) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [randomId(), shopId, name, price, sortOrder, kind, buff]
     );
   }
 }
@@ -695,13 +754,30 @@ function _migrateV3() {
   } catch (_e) { /* 忽略 */ }
 }
 
+/** 老库迁移：店铺消费流水 / 订单转售 / 商品分类与 buff 字段（逐列 ALTER，已存在则跳过） */
+function _migrateV4() {
+  const alters = [
+    'ALTER TABLE shops ADD COLUMN flow_total INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE orders ADD COLUMN resold INTEGER NOT NULL DEFAULT 0',
+    "ALTER TABLE products ADD COLUMN kind TEXT NOT NULL DEFAULT 'daily'",
+    "ALTER TABLE products ADD COLUMN buff TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN buffs_json TEXT NOT NULL DEFAULT '{}'",
+  ];
+  for (const sql of alters) {
+    try {
+      _db.exec(sql);
+    } catch (_e) {
+      // 列已存在，忽略
+    }
+  }
+}
+
 /**
  * 一次性发放开局首桶金（50 万，刚好够买第一家奶茶铺）
  * 用「新增 last_tick 列是否成功」作为迁移标记，保证只执行一次，
  * 否则玩家花光钱后重启服务又会被补满。
  */
-function _grantStartupCapital() {
-  try {
+function _grantStartupCapital() {  try {
     _db.exec('ALTER TABLE users ADD COLUMN last_tick INTEGER NOT NULL DEFAULT 0');
   } catch (_e) {
     return; // 列已存在 → 说明已经迁移过，不再发钱

@@ -6,6 +6,12 @@ import { formatMoney, TIERS, MAX_LEVEL, attackBidOf, incomeOf } from '../../shar
 import { dominationFactor, talentLevelOf } from '../../shared/prestige.js';
 import { showToast } from './toast.js';
 
+function escapeHtml(text) {
+  return String(text ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 /**
  * 资产面板：替代原来的店铺商品卡
  * - 未收购：展示反派挑衅台词 + 收购价 + 「甩出黑卡收购」
@@ -183,9 +189,37 @@ export class AssetCard {
         : `甩出黑卡收购 · ${formatMoney(asset.acquirePrice ?? asset.price)}`;
       this.hintEl.classList.add('hidden');
       this.actionBtn.classList.remove('danger');
+      // 分级收购门槛：tier≥2 显示材料/等级清单，未达标禁止收购
+      this._renderUnlock(asset);
     }
 
     this._renderEcon(asset, mine, other);
+  }
+
+  /** 收购门槛清单（asset.unlock 由服务端 buildState 下发：金币外的材料与持有店铺数） */
+  _renderUnlock(asset) {
+    const old = document.getElementById('asset-unlock');
+    old?.remove();
+    const unlock = asset.unlock;
+    if (!unlock || !unlock.required?.length) return;
+    const met = unlock.met;
+    const rows = unlock.required.map((r) => {
+      const okRow = r.have >= r.need;
+      const haveText = r.isShop ? `现有 ${r.have}` : `背包 ${r.have}/${r.need}`;
+      return `<li class="${okRow ? 'met' : 'missing'}">${okRow ? '✅' : '❌'} ${escapeHtml(r.name)} · ${haveText}</li>`;
+    }).join('');
+    const box = document.createElement('div');
+    box.id = 'asset-unlock';
+    box.className = 'asset-unlock';
+    box.innerHTML = `
+      <div class="asset-unlock-title">📜 收购门槛（材料在收购时消耗）</div>
+      <ul>${rows}</ul>
+      <div class="asset-unlock-hint">${met
+        ? '门槛已达成，可以收购'
+        : '去对应商店买入资格材料后再来收购'}</div>
+    `;
+    this.actionBtn.after(box);
+    this.actionBtn.disabled = this.busy || !met;
   }
 
   /** 经济提示：回本时间 + 按当前收租预计攒钱时间（纯展示，不参与结算） */

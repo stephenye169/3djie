@@ -8,7 +8,10 @@
  *   GET  /api/me                     当前登录用户（需 token）
  *   GET  /api/shops                  商铺列表
  *   GET  /api/shops/:id/products     某商铺商品
- *   POST /api/orders                 下单（需 token）
+ *   GET  /api/shops/:id/flow         店铺消费流水与档位
+ *   POST /api/orders                 下单（需 token；实付 10% 实时分给店铺收购人）
+ *   GET  /api/inventory              我的库存（已购未转售商品）
+ *   POST /api/orders/resell          转售库存商品（回收价 = 标价 85%~110% 随机）
  *   WS   /chat                       WebSocket 聊天
  *
  * 游戏接口（server/game.js）：
@@ -29,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 import { initDb, query, run, randomId, listUsersForAdmin, setChatBanned, deductBalance } from './db.js';
+import { SHOP_ROYALTY_RATE, SHOP_RESELL_RATE_MIN, SHOP_RESELL_RATE_MAX, shopFlowTier } from '../shared/assets.js';
 import authRouter, { authMiddleware, adminMiddleware } from './auth.js';
 import { publicRouter as announcementsRouter, adminRouter as adminAnnouncementsRouter } from './announcements.js';
 import { registerSocket, players, roomStats, ROOM_CAPACITY } from './chat.js';
@@ -109,7 +113,7 @@ app.get('/api/shops', (_req, res) => {
 });
 
 app.get('/api/shops/:id/products', (req, res) => {
-  const products = query('SELECT id, name, price FROM products WHERE shop_id = ? ORDER BY sort_order', [req.params.id]);
+  const products = query('SELECT id, name, price, kind, buff FROM products WHERE shop_id = ? ORDER BY sort_order', [req.params.id]);
   res.json(products);
 });
 
@@ -135,7 +139,7 @@ app.post('/api/orders', authMiddleware, (req, res) => {
   if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
   const q = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
 
-  const prods = query('SELECT shop_id, name, price FROM products WHERE id = ?', [product_id]);
+  const prods = query('SELECT id, shop_id, name, price, buff FROM products WHERE id = ?', [product_id]);
   if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
   const p = prods[0];
 
@@ -167,12 +171,135 @@ app.post('/api/orders', authMiddleware, (req, res) => {
   );
   if (coupon) run('UPDATE coupons SET used_at = ? WHERE id = ?', [Date.now(), coupon.id]);
 
+  // 店铺消费闭环：实付计入店铺流水；有收购人时实时分 10% 抽成（自己买自己店不抽成）
+  run('UPDATE shops SET flow_total = flow_total + ? WHERE id = ?', [total, p.shop_id]);
+  const ownerRow = query('SELECT user_id FROM player_shops WHERE shop_id = ? LIMIT 1', [p.shop_id])[0];
+  let royalty = 0;
+  if (ownerRow && ownerRow.user_id && ownerRow.user_id !== req.user.id) {
+    royalty = Math.floor(total * SHOP_ROYALTY_RATE);
+    if (royalty > 0) {
+      run(
+        'UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?',
+        [royalty, royalty, ownerRow.user_id]
+      );
+    }
+  }
+
+  // 增益商品：买入即激活（buff 编码 'type:ms:mult'；同类型重复购买叠加时长）
+  let buffType = null;
+  let buffUntil = 0;
+  if (p.buff) {
+    const [type, ms] = p.buff.split(':');
+    const duration = Number(ms) || 0;
+    if (type && duration > 0) {
+      const cur = query('SELECT buffs_json FROM users WHERE id = ?', [req.user.id])[0]?.buffs_json;
+      const buffs = (() => { try { return JSON.parse(cur || '{}'); } catch { return {}; } })();
+      const now = Date.now();
+      const base = Math.max(now, Number(buffs[type]) || now);
+      buffUntil = base + duration * q;
+      buffs[type] = buffUntil;
+      run('UPDATE users SET buffs_json = ? WHERE id = ?', [JSON.stringify(buffs), req.user.id]);
+      buffType = type;
+    }
+  }
+
   const remaining = Number(query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0]?.balance ?? 0);
   res.json({
     ok: true, product: p, qty: q, total,
     couponUsed: !!coupon, discount: coupon ? Math.round((1 - discount) * 100) : 0,
     remaining: Math.max(0, Math.floor(remaining)),
+    royalty, shopId: p.shop_id,
+    buffType: buffType || null, buffUntil: buffUntil || null,
   });
+});
+
+// 我的库存（买入未转售的商品，进货转售玩法）
+app.get('/api/inventory', authMiddleware, (req, res) => {
+  const rows = query(
+    `SELECT p.id AS product_id, p.name, p.price, s.id AS shop_id, s.name AS shop_name, s.emoji,
+            SUM(o.qty) AS bought, SUM(o.resold) AS resold
+     FROM orders o
+     JOIN products p ON p.id = o.product_id
+     JOIN shops s ON s.id = p.shop_id
+     WHERE o.user_id = ?
+     GROUP BY p.id
+     ORDER BY MAX(o.created_at) DESC`,
+    [req.user.id]
+  );
+  res.json(rows
+    .map((r) => ({
+      product_id: r.product_id, name: r.name, price: Number(r.price),
+      shop_id: r.shop_id, shop_name: r.shop_name, emoji: r.emoji,
+      qty: Math.max(0, Number(r.bought) - Number(r.resold)),
+    }))
+    .filter((r) => r.qty > 0));
+});
+
+// 转售：把已购商品卖给街面游客，回收价 = 标价 × 85%~110% 随机（服务端定率防作弊）
+app.post('/api/orders/resell', authMiddleware, (req, res) => {
+  const { product_id, qty = 1 } = req.body || {};
+  if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
+  const q = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
+
+  const prods = query('SELECT id, shop_id, name, price FROM products WHERE id = ?', [product_id]);
+  if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
+  const p = prods[0];
+
+  const agg = query(
+    'SELECT SUM(qty) AS s, SUM(resold) AS r FROM orders WHERE user_id = ? AND product_id = ?',
+    [req.user.id, product_id]
+  )[0] || {};
+  const avail = Math.max(0, Number(agg.s) - Number(agg.r));
+  if (avail < q) return res.status(409).json({ error: `库存不足（可转售 ${avail} 件）` });
+
+  const rate = SHOP_RESELL_RATE_MIN + Math.random() * (SHOP_RESELL_RATE_MAX - SHOP_RESELL_RATE_MIN);
+  const unit = Math.max(1, Math.round(p.price * rate));
+  const refund = unit * q;
+
+  // FIFO 标记已售：按下单时间从早到晚补 resold，直到凑满 q 件
+  let left = q;
+  const fifo = query(
+    'SELECT id, qty, resold FROM orders WHERE user_id = ? AND product_id = ? ORDER BY created_at',
+    [req.user.id, product_id]
+  );
+  for (const row of fifo) {
+    if (left <= 0) break;
+    const free = Number(row.qty) - Number(row.resold);
+    if (free <= 0) continue;
+    const take = Math.min(free, left);
+    run('UPDATE orders SET resold = resold + ? WHERE id = ?', [take, row.id]);
+    left -= take;
+  }
+
+  run(
+    'UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?',
+    [refund, refund, req.user.id]
+  );
+  const remaining = Number(query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0]?.balance ?? 0);
+  res.json({
+    ok: true, product: { id: p.id, name: p.name }, qty: q, refund, unit,
+    rate: Math.round(rate * 100), remaining: Math.max(0, Math.floor(remaining)),
+  });
+});
+
+// 某店铺消费流水与档位（商品卡/资产卡进度条展示）
+app.get('/api/shops/:id/flow', (req, res) => {
+  const row = query('SELECT flow_total FROM shops WHERE id = ?', [req.params.id])[0];
+  const flow = Number(row?.flow_total) || 0;
+  const t = shopFlowTier(flow);
+  res.json({
+    shop_id: req.params.id, flow_total: flow,
+    tier_index: t.index, share: t.share, next_tier: t.next,
+  });
+});
+
+// 已达流水档位的店铺列表（前端在其门口刷「客源金币」）
+app.get('/api/shops/flowtiers', (_req, res) => {
+  const rows = query('SELECT id, flow_total FROM shops WHERE active = 1');
+  const shops = rows
+    .map((r) => ({ shopId: r.id, tierIndex: shopFlowTier(r.flow_total).index }))
+    .filter((r) => r.tierIndex >= 0);
+  res.json(shops);
 });
 
 // 错误兜底

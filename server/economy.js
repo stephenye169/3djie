@@ -3,14 +3,27 @@
  * game.js 与 capital.js 共用，避免循环依赖
  */
 import { query, run } from './db.js';
-import { OFFLINE_CAP_MS, findAsset, incomeOf, titleFor } from '../shared/assets.js';
+import { OFFLINE_CAP_MS, findAsset, incomeOf, titleFor, BUFF_TYPES } from '../shared/assets.js';
 
 /** 该玩家已收购的店铺 */
 export function listOwned(userId) {
   return query(
-    'SELECT shop_id, level, acquired_at FROM player_shops WHERE user_id = ? ORDER BY acquired_at',
+    'SELECT shop_id, user_id, level, acquired_at FROM player_shops WHERE user_id = ? ORDER BY acquired_at',
     [userId]
   );
+}
+
+/** 活跃 buff：读取 buffs_json 过滤过期，按类型取最晚到期（game.js / treasure.js / economy.js 共用） */
+export function activeBuffs(userId) {
+  const row = query('SELECT buffs_json FROM users WHERE id = ?', [userId])[0];
+  let raw = {};
+  try { raw = JSON.parse(row?.buffs_json || '{}'); } catch { raw = {}; }
+  const now = Date.now();
+  const out = {};
+  for (const [type, until] of Object.entries(raw)) {
+    if (Number(until) > now) out[type] = Number(until);
+  }
+  return out;
 }
 
 /** 由持有列表算总每秒收益 */
@@ -26,7 +39,7 @@ export function assetValue(asset, level = 1) {
   return Math.round(asset.price * Math.pow(1.5, Math.max(0, level - 1)));
 }
 
-/** 惰性结算：把上次结算到现在的租金一次性发放 */
+/** 惰性结算：把上次结算到现在的租金一次性发放（日进斗金 buff 期间收益 ×1.25） */
 export function settle(userId) {
   const row = query('SELECT balance, income_per_sec, total_earned, last_tick FROM users WHERE id = ?', [userId])[0];
   if (!row) return { seconds: 0, earnings: 0 };
@@ -34,7 +47,9 @@ export function settle(userId) {
   const now = Date.now();
   const last = Number(row.last_tick) > 0 ? Number(row.last_tick) : now;
   const elapsed = Math.max(0, Math.min(now - last, OFFLINE_CAP_MS));
-  const rate = Number(row.income_per_sec) || 0;
+  let rate = Number(row.income_per_sec) || 0;
+  const buffs = activeBuffs(userId);
+  if (buffs.income) rate = Math.round(rate * BUFF_TYPES.income.mult);
   const earnings = Math.round(rate * elapsed / 1000);
 
   if (earnings > 0) {

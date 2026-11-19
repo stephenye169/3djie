@@ -23,6 +23,7 @@ export class Player {
     this.radius = 0.5;
     this.height = 1.8;
     this.speed = 6;
+    this.speedMult = 1; // 健步如飞 buff 倍率（main.js 由 gameStore buffs 驱动）
     this.sprintSpeed = 12; // Shift 加速奔跑速度
     this.jumpSpeed = 7;
     this.gravity = -18;
@@ -68,7 +69,7 @@ export class Player {
     const hairMat = new THREE.MeshStandardMaterial({ color: female ? 0x4a3020 : 0x3b2f2a, roughness: 0.85 });
     const shirtMat = new THREE.MeshStandardMaterial({ color: female ? 0xc8323c : 0x3b82f6, roughness: 0.75 });
     const pantsMat = new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.85 });
-    const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.9 });
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 0.6 }); // 眼睛/嘴巴深黑
     const legMat = female ? skin : pantsMat; // 女生裙子下露出小腿
 
     // rig 原点在脚底，整体下移半高，使 group 原点保持在碰撞体中心
@@ -77,14 +78,15 @@ export class Player {
     rig.position.y = -this.height / 2;
     group.add(rig);
 
-    /** 把单个 geometry 施加局部变换后返回（不修改原 geo，便于后续 mirror） */
+    /** 把单个 geometry 施加局部变换后返回（不修改原 geo，便于后续 mirror）。
+     *  变换语义为标准 SRT：先缩放、再自转、最后平移——平移量不被缩放/旋转篡改 */
     const _apply = (geo, { x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0 }) => {
       const g = geo.clone();
-      g.translate(x, y, z);
-      g.scale(sx, sy, sz);
+      if (sx !== 1 || sy !== 1 || sz !== 1) g.scale(sx, sy, sz);
       if (rx) g.rotateX(rx);
       if (ry) g.rotateY(ry);
       if (rz) g.rotateZ(rz);
+      g.translate(x, y, z);
       return g;
     };
 
@@ -113,15 +115,14 @@ export class Player {
       return copy;
     };
 
-    // ---- 腿：左侧构建后镜像（动态 Group，内部两个不同材质 mesh 无法合并） ----
-    const legGeo = new THREE.CapsuleGeometry(0.075, 0.5, 4, 6);
-    const shoeGeoRaw = new THREE.SphereGeometry(0.095, 8, 6);
+    // ---- 腿：单胶囊从髋到脚底、圆头收尾（无独立鞋件——鞋挂在摆动组上会随腿旋转翘起显怪，
+    //      圆头收尾走路时天然贴合，每腿部件 2→1 也更简洁；左侧构建后镜像） ----
+    const legGeo = new THREE.CapsuleGeometry(0.075, 0.65, 4, 6);
     const legL = new THREE.Group();
     legL.name = 'legLeft';
     legL.position.set(-0.11, 0.8, 0);
     rig.add(legL);
-    _mergeToParent([{ geo: legGeo, mat: legMat, y: -0.36 }], legL);
-    _mergeToParent([{ geo: shoeGeoRaw, mat: shoeMat, y: -0.74, z: 0.05, sx: 1, sy: 0.55, sz: 1.5 }], legL);
+    _mergeToParent([{ geo: legGeo, mat: legMat, y: -0.4 }], legL);
     const legR = mirrorGroupX(legL);
 
     // ---- 躯干 + 女生裙摆（同材质 shirtMat，合并成一个 mesh） ----
@@ -143,32 +144,35 @@ export class Player {
     _mergeToParent([{ geo: handGeo, mat: skin, y: -0.47 }], armL);
     const armR = mirrorGroupX(armL);
 
-    // ---- 头：headGroup 以头心为轴（眼睛=shoeMat / 发=hairMat 各自合并，头=skin 单独） ----
+    // ---- 头：headGroup 以头心为轴（头+鼻=skin / 眼+嘴=eyeMat / 发=hairMat 各自合并） ----
     const headGroup = new THREE.Group();
     headGroup.name = 'headGroup';
     headGroup.position.set(0, 1.56, 0);
     rig.add(headGroup);
 
-    // 头（skin）
-    _mergeToParent([{
-      geo: new THREE.SphereGeometry(0.185, 12, 8),
-      mat: skin, sx: 1, sy: 1.02, sz: 0.96,
-    }], headGroup);
+    // 头 + 鼻子（skin 同材质合并成 1 个 mesh，鼻子为小竖椭球含蓄突出，不增加 draw）
+    _mergeToParent([
+      { geo: new THREE.SphereGeometry(0.185, 12, 8), mat: skin, sx: 1, sy: 1.02, sz: 0.96 },
+      { geo: new THREE.SphereGeometry(0.022, 6, 5), mat: skin, y: 0.012, z: 0.183, sy: 1.25 },
+    ], headGroup);
 
-    // 眼睛（shoeMat：左眼 + 镜像右眼 → 同一材质合并）
-    const eyeGeo = new THREE.SphereGeometry(0.026, 5, 4);
-    const eyes = [
-      { geo: eyeGeo, mat: shoeMat, x: -0.066, y: 0.025, z: 0.17 },
-      { geo: eyeGeo, mat: shoeMat, x: 0.066, y: 0.025, z: 0.17 },
-    ];
-    _mergeToParent(eyes, headGroup);
+    // 眼睛 + 嘴巴（eyeMat 同材质合并成 1 个 mesh：眼 0.024 小巧，嘴为扁长微笑条；
+    // 五官整体上移贴近脸中线，避免额头留白过大造成"上空下挤"）
+    const eyeGeo = new THREE.SphereGeometry(0.024, 6, 5);
+    const mouthGeo = new THREE.SphereGeometry(0.018, 6, 4);
+    _mergeToParent([
+      { geo: eyeGeo, mat: eyeMat, x: -0.058, y: 0.055, z: 0.165 },
+      { geo: eyeGeo, mat: eyeMat, x: 0.058, y: 0.055, z: 0.165 },
+      { geo: mouthGeo, mat: eyeMat, y: -0.052, z: 0.176, sx: 1.9, sy: 0.55 },
+    ], headGroup);
 
     // 头发（hairMat：全部同材质 → 合并成 1 个 mesh）
     const hairParts = [];
-    // 头顶发罩：半球
+    // 头顶发帽：只盖头顶（theta 0.35π ≈ 63°，下缘在额头 y≈0.09），
+    // 前脸从额头以下全露出——旧版全方位头盔式发罩曾把眼睛/鼻子/嘴全部包住（"缺五官"的根因）
     hairParts.push({
-      geo: new THREE.SphereGeometry(0.197, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.54),
-      mat: hairMat, x: 0, y: 0.002, z: -0.008,
+      geo: new THREE.SphereGeometry(0.192, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.35),
+      mat: hairMat,
     });
     if (female) {
       // 后披长发（压扁胶囊）
@@ -180,8 +184,8 @@ export class Player {
       // 马尾（居中）
       hairParts.push({ geo: new THREE.CapsuleGeometry(0.052, 0.26, 3, 5), mat: hairMat, y: -0.26, z: -0.21, rx: 0.3 });
     } else {
-      // 后脑短发（压扁球）
-      hairParts.push({ geo: new THREE.SphereGeometry(0.165, 10, 7), mat: hairMat, x: 0, y: -0.03, z: -0.09, sx: 1.05, sy: 0.9, sz: 0.8 });
+      // 后脑短发（压扁球，与前罩衔接）
+      hairParts.push({ geo: new THREE.SphereGeometry(0.165, 10, 7), mat: hairMat, x: 0, y: -0.02, z: -0.1, sx: 1.05, sy: 0.85, sz: 0.75 });
     }
     _mergeToParent(hairParts, headGroup);
 
@@ -348,7 +352,7 @@ export class Player {
 
     if (moveDir.lengthSq() > 0) {
       moveDir.normalize();
-      const curSpeed = input.sprint ? this.sprintSpeed : this.speed;
+      const curSpeed = (input.sprint ? this.sprintSpeed : this.speed) * this.speedMult;
       this.velocity.x = moveDir.x * curSpeed;
       this.velocity.z = moveDir.z * curSpeed;
       // 角色朝向移动方向

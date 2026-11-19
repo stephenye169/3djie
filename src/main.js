@@ -37,12 +37,12 @@ import { QuestCard } from './ui/QuestCard.js';
 import { PrestigePanel } from './ui/PrestigePanel.js';
 import { lootMoney } from './ui/LootFx.js';
 import { gameStore } from './state/game.js';
-import { formatMoney, TELEPORT_COST } from '../shared/assets.js';
+import { formatMoney, TELEPORT_COST, BUFF_TYPES } from '../shared/assets.js';
 import { getShopById } from './data/shops.js';
 import { getShopNpc } from './data/npcs.js';
-import { wallet } from './state/wallet.js';
 import { showToast } from './ui/toast.js';
 import { WalletPanel } from './ui/WalletPanel.js';
+import { ShopProductsCard } from './ui/ShopProductsCard.js';
 import { api, setToken, getToken, createChatClient } from './api/client.js';
 
 // 同浏览器多开联调：URL 带 ?fresh 时清掉本标签的登录态，强制以新客户端重新选角色
@@ -221,7 +221,6 @@ async function bootstrap() {
   if (token) {
     try {
       const me = await api.me();
-      await wallet.refresh(api);
       start(world, me, scene, camera, renderer);
       return;
     } catch (err) {
@@ -233,9 +232,7 @@ async function bootstrap() {
 
   // 没 token 或 token 失效 → 角色选择 → 注册 → start
   showCharacterSelect((user) => {
-    wallet.refresh(api).finally(() => {
-      start(world, user, scene, camera, renderer);
-    });
+    start(world, user, scene, camera, renderer);
   });
 }
 
@@ -251,6 +248,7 @@ function start(world, user, scene, camera, renderer) {
 
   // 第三人称摄像机
   const tpCamera = new ThirdPersonCamera(camera, renderer.domElement);
+  window.__tpCam = tpCamera; // 调试钩子：控制台可查/改 yaw·pitch（排障与自动化截图用）
 
   // ---- 界面元素 ----
   const shopListEl = document.getElementById('shop-list');
@@ -357,16 +355,17 @@ function start(world, user, scene, camera, renderer) {
   const locationEl = document.getElementById('panel-location');
   const exitShopBtn = document.getElementById('exit-shop');
   const dialogue = new DialoguePanel();
+  const productsCard = new ShopProductsCard({ onClose: () => {} });
   let mode = 'street';
   let transitioning = false;
   let streetState = null;
   let currentRoom = null;
 
-  // 店内点击：柜台/货架 → 商品卡片；店员 → 对话
+  // 店内点击：柜台/货架/商品 → 商品卡（进货转售）；店员 → 对话
   const interiorInteraction = new InteriorInteraction(camera, renderer.domElement, {
     onShop: (shopId) => {
       const shop = getShopById(shopId);
-      if (shop) interaction.open(shop);
+      if (shop) productsCard.open(shopId, shop);
     },
     onNpc: (shopId) => openNpc(shopId)
   });
@@ -399,21 +398,49 @@ function start(world, user, scene, camera, renderer) {
   const walkState = { last: null, meters: 0, nextReportAt: 0 };
 
   const coinRain = new CoinRain(scene, player, world.groundY, world.bounds, camera, renderer.domElement, {
-    onCollect: async (type) => {
-      const res = await gameStore.collect(type);
+    onCollect: async (type, entry) => {
+      const res = await gameStore.collect(type, entry?.shopId);
       if (!res.ok) {
         if (res.status !== 429) showToast(res.message || '拾取失败');
         return false;
       }
       lootMoney(res.reward, {
         crit: res.crit,
-        label: type === 'box' ? '财阀金币箱' : (res.crit ? '暴击' : '金币到账'),
+        label: type === 'box' ? '财阀金币箱' : type === 'shopflow' ? '客源金币' : (res.crit ? '暴击' : '金币到账'),
       });
+      if (type === 'shopflow' && res.royalty > 0) {
+        showToast(`这家店的老板分走 ¥${formatMoney(res.royalty)}（客流档位分成）`);
+      }
       // 暴击才值得秘书报一句（普通金币太频繁）
       if (res.crit) gameStore.emitEvent('crit', { reward: res.reward });
       return true;
     },
   });
+
+  // ---- 商品 buff：驱动移动速度 / 拾取半径，顶部状态条展示剩余时间 ----
+  // （放在 coinRain 之后：subscribe 首次回调立即执行，避免 TDZ）
+  const buffBarEl = document.getElementById('buff-bar');
+  let buffItems = [];
+  function applyBuffs(view) {
+    const buffs = view?.buffs || {};
+    player.speedMult = buffs.speed ? BUFF_TYPES.speed.mult : 1;
+    coinRain.setMagnetMult(buffs.magnet ? BUFF_TYPES.magnet.mult : 1);
+    buffItems = Object.entries(buffs)
+      .filter(([type]) => BUFF_TYPES[type])
+      .map(([type, until]) => ({ type, icon: BUFF_TYPES[type].icon, name: BUFF_TYPES[type].name, until: Number(until) }));
+    renderBuffBar();
+  }
+  function renderBuffBar() {
+    if (!buffBarEl) return;
+    const now = Date.now();
+    const alive = buffItems.filter((b) => b.until > now);
+    buffBarEl.classList.toggle('hidden', alive.length === 0);
+    buffBarEl.innerHTML = alive.map((b) =>
+      `<span class="buff-chip" title="${b.name}">${b.icon} ${Math.ceil((b.until - now) / 1000)}s</span>`
+    ).join('');
+  }
+  gameStore.subscribe((view) => applyBuffs(view));
+  setInterval(renderBuffBar, 1000);
 
   const tauntNpcs = new TauntNpcs(scene, world.groundY, {
     onTrigger: (cfg) => {
@@ -455,6 +482,17 @@ function start(world, user, scene, camera, renderer) {
         </span>
         <span class="shop-list-dot"></span>
       `;
+      // 传送小按钮：与地图传送同一条服务端扣款链路（¥10 万/次），落到该店门口触发圈。
+      // 用 span 而非嵌套 button（button 内不允许再嵌 button，innerHTML 解析会被拆散）
+      const tpBtn = document.createElement('span');
+      tpBtn.className = 'shop-list-tp';
+      tpBtn.textContent = '🌀';
+      tpBtn.title = `传送到门口（¥${formatMoney(TELEPORT_COST)}/次）`;
+      tpBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); // 不触发列表项的「打开资产卡」
+        teleportFromList(asset.id, tpBtn);
+      });
+      item.appendChild(tpBtn);
       item.addEventListener('click', () => interaction.open(asset.id));
       shopListEl.appendChild(item);
       shopItemById.set(asset.id, item);
@@ -595,6 +633,10 @@ function start(world, user, scene, camera, renderer) {
       dialogue.close();
       return;
     }
+    if (productsCard.isOpen()) {
+      productsCard.close();
+      return;
+    }
     if (interaction.isOpen()) {
       interaction.close();
       return;
@@ -631,6 +673,16 @@ function start(world, user, scene, camera, renderer) {
   // 踢馆 3D 演出：防守方视角攻击者模型跑位挑衅 + 攻击方甩黑卡飞牌
   const attackTheater = new AttackTheater(scene, entrances);
   const rings = entrances.map((e) => new TriggerRing(scene, e));
+
+  // ---- 客源金币：达流水档位的店铺门口定期刷币（拾取者得全额、店主按档分成） ----
+  coinRain.entrances = entrances;
+  const refreshFlowShops = async () => {
+    try {
+      coinRain.setFlowShops(await api.flowTiers());
+    } catch { /* 静默：下一轮再拉 */ }
+  };
+  refreshFlowShops();
+  setInterval(refreshFlowShops, 60_000);
 
   // ---- 地图模式（M 键）：斜俯视总览，点击店名飞过去 ----
   const mapView = new MapView(camera, scene, renderer.domElement);
@@ -682,6 +734,39 @@ function start(world, user, scene, camera, renderer) {
     mapView.exitTo(tpCamera.pose(player.position), () => {
       restoreStreetCamera(player.position);
     });
+  }
+
+  /**
+   * 左侧资产清单「🌀 传送到门口」：复用地图传送的同一条服务端扣款链路（¥10 万/次），
+   * 落点为该店门口触发圈（entrances），落地即可看到门口光圈并自动弹资产卡。
+   */
+  async function teleportFromList(assetId, tpEl) {
+    if (mode !== 'street' || transitioning || teleportPending || mapView.active) return;
+    if (interaction.isOpen()) interaction.close();
+    const entrance = entrances.find((e) => e.shopId === assetId);
+    if (!entrance) {
+      showToast('该资产暂无传送点');
+      return;
+    }
+    teleportPending = true;
+    tpEl?.classList.add('busy');
+    try {
+      const res = await gameStore.teleport(assetId);
+      if (!res.ok) {
+        showToast(res.message || `余额不足，传送需要 ¥${formatMoney(TELEPORT_COST)}`);
+        return;
+      }
+      player.teleport(entrance.x, entrance.z);
+      player.mesh.rotation.y = Math.PI; // 面向店铺
+      tpCamera.yaw = 0;
+      tpCamera.pitch = 0.16;
+      restoreStreetCamera(player.position);
+      const shop = getShopById(assetId);
+      showToast(`已传送至「${shop?.name || assetId}」门口（-¥${formatMoney(TELEPORT_COST)}）`);
+    } finally {
+      teleportPending = false;
+      tpEl?.classList.remove('busy');
+    }
   }
 
   mapView.onPick = async (point) => {
