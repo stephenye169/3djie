@@ -3716,3 +3716,21 @@ body.attack-shake canvas {
 .asset-unlock li.met { color: #86efac; }
 .asset-unlock li.missing { color: #fca5a5; }
 .asset-unlock-hint { margin-top: 6px; font-size: 10px; color: #94a3b8; }
+
+/* 背包「使用」按钮（boost 激活，与转售互斥） */
+.wallet-use-btn {
+  margin-left: auto;
+  padding: 3px 12px;
+  border: none;
+  border-radius: 7px;
+  background: rgba(125, 211, 252, 0.16);
+  color: #7dd3fc;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+.wallet-use-btn:hover:not(:disabled) { background: rgba(125, 211, 252, 0.32); transform: scale(1.05); }
+.wallet-use-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.wallet-row:has(.wallet-use-btn) .wallet-resell-btn { margin-left: 6px; }
+.wallet-tag { font-style: normal; font-size: 10px; color: #94a3b8; }

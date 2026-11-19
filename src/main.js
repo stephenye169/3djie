@@ -611,6 +611,11 @@ function start(world, user, scene, camera, renderer) {
       closeChat();
       return;
     }
+    // 踢馆紧急警报在场：Esc 不关闭任何 UI（护盘/还价倒计时不能被误关，专注决策）
+    if (attackAlert.isOpen?.()) {
+      e.preventDefault();
+      return;
+    }
     // 资本轮回面板
     if (prestigePanel.isOpen()) {
       closePrestige();

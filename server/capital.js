@@ -129,10 +129,25 @@ export function isNewPlayer(userId) {
   return { isNew: false, reason: null, hoursLeft: 0 };
 }
 
-/** 启动时把上次进程残留的进行中记录标记过期，并清理所有已到期的冷却记录 */
+/** 启动时扫表：把上次进程残留的进行中踢馆托管金退回攻击方（重启不再丢钱），并清理到期冷却 */
 export function initCapital() {
   try {
-    run("UPDATE shop_attacks SET status = 'expired', resolved_at = ? WHERE status = 'pending'", [Date.now()]);
+    // 残留 pending = 进程重启时仍在进行的踢馆：托管金原路退回攻击方，状态标记 refunded
+    const stale = query(
+      "SELECT id, shop_id, attacker_id, bid FROM shop_attacks WHERE status = 'pending'"
+    );
+    for (const r of stale) {
+      run(
+        'UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?',
+        [Number(r.bid), Number(r.bid), r.attacker_id]
+      );
+      run("UPDATE shop_attacks SET status = 'refunded', resolved_at = ? WHERE id = ?", [Date.now(), r.id]);
+      try { setShopCooldown(r.shop_id, Date.now() + COOLDOWN_MS); } catch { /* 冷却表缺失时忽略 */ }
+      console.log(`[capital] 重启退款：踢馆 ${r.id} 托管金 ¥${formatMoney(Number(r.bid))} 已退回攻击方 ${r.attacker_id}`);
+    }
+    if (stale.length > 0) {
+      console.log(`[capital] 共退还 ${stale.length} 场残留踢馆托管金`);
+    }
   } catch (err) {
     console.warn('[capital] 清理残留踢馆失败:', err.message);
   }

@@ -17,7 +17,7 @@ function buffDesc(buff) {
  * 店内商品卡：柜台/货架点击打开（进货转售玩法入口）
  * - 上半：店铺消费流水进度条（档位越高，门口客源金币给店主的分成越高）
  * - 中部：商品列表 → 「买入」（实付计入流水，10% 实时分给店铺收购人）
- * - 下部：本店库存 → 「转售」给街面游客（回收价 = 标价 85%~110% 随机，差价归玩家）
+ * - 下部：本店库存 → 「转售」给街面游客（回收价 = 实付价 85%~95% 随机，转售期望为负——堵死套利）
  */
 export class ShopProductsCard {
   constructor({ onClose } = {}) {
@@ -107,7 +107,7 @@ export class ShopProductsCard {
         <button class="products-close" data-act="close" title="关闭">×</button>
       </div>
       ${flowHtml}
-      <div class="products-hint">买入 = 进货，实付的 ${Math.round(SHOP_ROYALTY_RATE * 100)}% 实时分给店铺收购人；转售回收价为标价 85%~110% 随机，差价归你</div>
+      <div class="products-hint">买入 = 进货，实付的 ${Math.round(SHOP_ROYALTY_RATE * 100)}% 实时分给店铺收购人；转售按实付价 85%~95% 回收（期望为负，进货请以自用增益/收购材料为目的）</div>
       <div class="products-section-label">在售商品</div>
       ${rows || '<div class="products-empty">本店暂未上架商品</div>'}
       <div class="products-section-label">我的库存（本店）</div>
@@ -167,7 +167,7 @@ export class ShopProductsCard {
     try {
       const res = await api.resell(productId, 1);
       const diff = res.refund - (res.unit ? res.unit : 0);
-      showToast(`已转售「${res.product?.name || '商品'}」 +¥${formatMoney(res.refund)}（回收率 ${res.rate}%）`);
+      showToast(`已转售「${res.product?.name || '商品'}」 +¥${formatMoney(res.refund)}（按实付回收 ${res.rate}%）`);
       await this.open(this.shopId);
     } catch (err) {
       showToast(err.message || '转售失败');

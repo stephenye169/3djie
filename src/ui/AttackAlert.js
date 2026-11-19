@@ -111,6 +111,9 @@ export class AttackAlert {
     this.verdictUntil = 0;
     this.totalMs = Math.max(1000, Math.min(WINDOW_MS, attack.expiresAt - Date.now()));
 
+    // 踢馆紧急弹窗：立即释放鼠标锁定，确保玩家能第一时间点护盘/还价按钮
+    if (document.pointerLockElement) document.exitPointerLock();
+
     const asset = gameStore.asset?.(attack.shopId);
     if (this.attackerEl) this.attackerEl.textContent = attack.attackerNick;
     if (this.shopEl) this.shopEl.textContent = attack.shopName;
@@ -394,6 +397,11 @@ export class AttackAlert {
   _clearTimer() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /** 踢馆紧急弹窗是否在场（Esc 分级关闭链据此跳过，防止误关警报） */
+  isOpen() {
+    return !!this.attack && !this.el.classList.contains('hidden');
   }
 
   close() {

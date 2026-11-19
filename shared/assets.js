@@ -19,7 +19,8 @@ export const TELEPORT_COST = 100_000;   // 地图点击传送费用：¥10 万/�
  *  - 店铺流水达档后店门口刷「客源金币」：任何人捡到，收购人按档位分成 */
 export const SHOP_ROYALTY_RATE = 0.10;                       // 店主抽成比例
 export const SHOP_RESELL_RATE_MIN = 0.85;                    // 转售回收率下限
-export const SHOP_RESELL_RATE_MAX = 1.10;                    // 转售回收率上限
+export const SHOP_RESELL_RATE_MAX = 0.95;                    // 转售回收率上限（0.85~0.95 期望 0.90 < 1，无券必亏）
+export const SHOP_RESELL_COUPON_COST_BASIS = true;           // 券购商品按实付价回收：堵死「9 折买入 + 期望回收」正期望套利
 export const SHOP_FLOW_TIERS = [10_000, 100_000, 1_000_000]; // 流水档位（累计实付）
 export const SHOP_FLOW_SHARE = [0.30, 0.50, 0.80];           // 各档客源金币给店主的分成
 export const SHOP_FLOW_COIN_BASE = 5_000;                    // 客源金币基础面额
@@ -46,18 +47,29 @@ export const TIERS = {
   4: { name: '黄金店铺', label: '第四幕' },
 };
 
-/* ============ 商品经济体系（三类商品 × 分级收购门槛） ============
- * 商品 kind 三类：
- *   daily  日常消费——临时增益（移动速度/金币暴击/拾取半径，60~120s）
- *   boost  功能商品——长效增益（收租收益/金币金额，10 分钟）
- *   permit 收购资格——材料商品，收购 tier≥2 店铺时按清单消耗
+/* ============ 商品经济体系（消耗品 vs 流通品，资产去向互斥） ============
+ * 商品 kind 三类，资产去向严格互斥（绝不允许「既用了效果又卖了货」）：
+ *   daily  日常消费（食品饮品）：买完立即吃掉/喝掉，buff 即时生效，不进背包、不可转售
+ *   boost  功能商品（文创百货）：进背包，须在背包「使用」才激活 buff 并扣除库存；
+ *          未使用的可自由转售——用掉还是卖掉，玩家自己抉择
+ *   permit 收购资格（硬通货）：进背包持有，两种去向：转售换钱 / 收购 tier≥2 店铺时按清单消耗
  * 玩家循环：赚金币 → 买商品获得能力/凑资格 → 收购高级店铺 → 赚更多金币
  */
 export const PRODUCT_KINDS = {
-  daily: { name: '日常消费', icon: '🥤', desc: '临时增益（1~2 分钟）' },
-  boost: { name: '功能商品', icon: '⚡', desc: '长效增益（10 分钟）' },
-  permit: { name: '收购资格', icon: '📜', desc: '收购高级店铺的必需材料' },
+  daily: { name: '即食消耗', icon: '🥤', desc: '买后立即生效，不进背包、不可转售' },
+  boost: { name: '功能商品', icon: '⚡', desc: '进背包「使用」激活，未用可转售' },
+  permit: { name: '收购资格', icon: '📜', desc: '硬通货：可转售，收购时消耗' },
 };
+
+/** 餐饮店清单：客流档位门槛减半（补偿 daily 不可转售带来的客流变现下降） */
+export const RESTAURANT_SHOPS = ['milktea', 'wonton', 'cafe', 'teahouse', 'bakery', 'dessert'];
+
+/** 带店铺属性的流水档位：餐饮店等效门槛减半（原 ¥1 万档餐饮店 ¥2 万即达标…原档位 ×0.5） */
+export function shopFlowTierFor(shopId, flowTotal) {
+  const isRestaurant = RESTAURANT_SHOPS.includes(shopId);
+  const flow = (Number(flowTotal) || 0) * (isRestaurant ? 2 : 1);
+  return { ...shopFlowTier(flow), restaurant: isRestaurant };
+}
 
 /** buff 定义：type → { name, icon, mult 倍率 }；时长由商品 buff 字段携带 */
 export const BUFF_TYPES = {

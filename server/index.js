@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
 import { initDb, query, run, randomId, listUsersForAdmin, setChatBanned, deductBalance } from './db.js';
-import { SHOP_ROYALTY_RATE, SHOP_RESELL_RATE_MIN, SHOP_RESELL_RATE_MAX, shopFlowTier } from '../shared/assets.js';
+import { SHOP_ROYALTY_RATE, SHOP_RESELL_RATE_MIN, SHOP_RESELL_RATE_MAX, shopFlowTierFor } from '../shared/assets.js';
 import authRouter, { authMiddleware, adminMiddleware } from './auth.js';
 import { publicRouter as announcementsRouter, adminRouter as adminAnnouncementsRouter } from './announcements.js';
 import { registerSocket, players, roomStats, ROOM_CAPACITY } from './chat.js';
@@ -133,13 +133,29 @@ app.get('/api/orders/my', authMiddleware, (req, res) => {
   res.json({ orders, coupons });
 });
 
+/** 增益激活：解析商品 buff 编码写入 buffs_json（同类型重复激活叠加时长） */
+function applyProductBuff(userId, buffStr, qty) {
+  if (!buffStr) return { type: null, until: 0 };
+  const [type, ms] = String(buffStr).split(':');
+  const duration = Number(ms) || 0;
+  if (!type || duration <= 0) return { type: null, until: 0 };
+  const cur = query('SELECT buffs_json FROM users WHERE id = ?', [userId])[0]?.buffs_json;
+  const buffs = (() => { try { return JSON.parse(cur || '{}'); } catch { return {}; } })();
+  const now = Date.now();
+  const base = Math.max(now, Number(buffs[type]) || now);
+  const until = base + duration * qty;
+  buffs[type] = until;
+  run('UPDATE users SET buffs_json = ? WHERE id = ?', [JSON.stringify(buffs), userId]);
+  return { type, until };
+}
+
 // 下单（每日限购 + 优惠券自动抵扣 + 写订单）
 app.post('/api/orders', authMiddleware, (req, res) => {
   const { product_id, qty = 1 } = req.body || {};
   if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
   const q = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
 
-  const prods = query('SELECT id, shop_id, name, price, buff FROM products WHERE id = ?', [product_id]);
+  const prods = query('SELECT id, shop_id, name, price, kind, buff FROM products WHERE id = ?', [product_id]);
   if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
   const p = prods[0];
 
@@ -165,9 +181,11 @@ app.post('/api/orders', authMiddleware, (req, res) => {
   if (!deductBalance(req.user.id, total)) {
     return res.status(402).json({ error: '余额不足' });
   }
+  // daily 即食消耗品：买完立即消耗（resold=qty 标记），不进背包、不可转售
+  const consumedNow = p.kind === 'daily' ? q : 0;
   run(
-    'INSERT INTO orders (id, user_id, product_id, qty, paid, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [randomId(), req.user.id, product_id, q, total, Date.now()]
+    'INSERT INTO orders (id, user_id, product_id, qty, resold, paid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [randomId(), req.user.id, product_id, q, consumedNow, total, Date.now()]
   );
   if (coupon) run('UPDATE coupons SET used_at = ? WHERE id = ?', [Date.now(), coupon.id]);
 
@@ -185,22 +203,13 @@ app.post('/api/orders', authMiddleware, (req, res) => {
     }
   }
 
-  // 增益商品：买入即激活（buff 编码 'type:ms:mult'；同类型重复购买叠加时长）
+  // 增益商品：daily 即食买完立即激活；boost 进背包由「使用」激活（互斥：用了的不能再卖）
   let buffType = null;
   let buffUntil = 0;
-  if (p.buff) {
-    const [type, ms] = p.buff.split(':');
-    const duration = Number(ms) || 0;
-    if (type && duration > 0) {
-      const cur = query('SELECT buffs_json FROM users WHERE id = ?', [req.user.id])[0]?.buffs_json;
-      const buffs = (() => { try { return JSON.parse(cur || '{}'); } catch { return {}; } })();
-      const now = Date.now();
-      const base = Math.max(now, Number(buffs[type]) || now);
-      buffUntil = base + duration * q;
-      buffs[type] = buffUntil;
-      run('UPDATE users SET buffs_json = ? WHERE id = ?', [JSON.stringify(buffs), req.user.id]);
-      buffType = type;
-    }
+  if (p.kind === 'daily' && p.buff) {
+    const applied = applyProductBuff(req.user.id, p.buff, q);
+    buffType = applied.type;
+    buffUntil = applied.until;
   }
 
   const remaining = Number(query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0]?.balance ?? 0);
@@ -213,10 +222,10 @@ app.post('/api/orders', authMiddleware, (req, res) => {
   });
 });
 
-// 我的库存（买入未转售的商品，进货转售玩法）
+// 我的库存（买入未消耗的商品；daily 即食买时已消耗自动消失，boost 待使用，permit 待收购/转售）
 app.get('/api/inventory', authMiddleware, (req, res) => {
   const rows = query(
-    `SELECT p.id AS product_id, p.name, p.price, s.id AS shop_id, s.name AS shop_name, s.emoji,
+    `SELECT p.id AS product_id, p.name, p.price, p.kind, s.id AS shop_id, s.name AS shop_name, s.emoji,
             SUM(o.qty) AS bought, SUM(o.resold) AS resold
      FROM orders o
      JOIN products p ON p.id = o.product_id
@@ -229,21 +238,30 @@ app.get('/api/inventory', authMiddleware, (req, res) => {
   res.json(rows
     .map((r) => ({
       product_id: r.product_id, name: r.name, price: Number(r.price),
+      kind: r.kind || 'daily',
       shop_id: r.shop_id, shop_name: r.shop_name, emoji: r.emoji,
       qty: Math.max(0, Number(r.bought) - Number(r.resold)),
     }))
     .filter((r) => r.qty > 0));
 });
 
-// 转售：把已购商品卖给街面游客，回收价 = 标价 × 85%~110% 随机（服务端定率防作弊）
+// 转售：把已购商品卖给街面游客。
+// 回收价 = 【实付单价】× 85%~95% 随机（服务端定率防作弊）：
+//   - 无券买入：回收期望 90% < 100%，纯转售必亏
+//   - 9 折券买入：按实付（标价×0.9）回收，期望 90%×0.9 = 81% < 90% 实付，同样必亏
+//   → 彻底堵死「优惠券买入 + 转售」与「双人互刷」正期望套利
+// daily 即食消耗品不可转售（买完即消耗，资产去向互斥）
 app.post('/api/orders/resell', authMiddleware, (req, res) => {
   const { product_id, qty = 1 } = req.body || {};
   if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
   const q = Math.max(1, Math.min(99, Math.floor(Number(qty)) || 1));
 
-  const prods = query('SELECT id, shop_id, name, price FROM products WHERE id = ?', [product_id]);
+  const prods = query('SELECT id, shop_id, name, price, kind FROM products WHERE id = ?', [product_id]);
   if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
   const p = prods[0];
+  if (p.kind === 'daily') {
+    return res.status(409).json({ error: '食品饮品类是即食消耗品，买下时已立即生效，不可转售' });
+  }
 
   const agg = query(
     'SELECT SUM(qty) AS s, SUM(resold) AS r FROM orders WHERE user_id = ? AND product_id = ?',
@@ -253,13 +271,12 @@ app.post('/api/orders/resell', authMiddleware, (req, res) => {
   if (avail < q) return res.status(409).json({ error: `库存不足（可转售 ${avail} 件）` });
 
   const rate = SHOP_RESELL_RATE_MIN + Math.random() * (SHOP_RESELL_RATE_MAX - SHOP_RESELL_RATE_MIN);
-  const unit = Math.max(1, Math.round(p.price * rate));
-  const refund = unit * q;
 
-  // FIFO 标记已售：按下单时间从早到晚补 resold，直到凑满 q 件
+  // FIFO 逐单按实付单价回收：paid/qty = 该单实际掏的钱（含券抵扣），券越深回收越少
   let left = q;
+  let refund = 0;
   const fifo = query(
-    'SELECT id, qty, resold FROM orders WHERE user_id = ? AND product_id = ? ORDER BY created_at',
+    'SELECT id, qty, resold, paid FROM orders WHERE user_id = ? AND product_id = ? ORDER BY created_at',
     [req.user.id, product_id]
   );
   for (const row of fifo) {
@@ -267,9 +284,13 @@ app.post('/api/orders/resell', authMiddleware, (req, res) => {
     const free = Number(row.qty) - Number(row.resold);
     if (free <= 0) continue;
     const take = Math.min(free, left);
+    const paidPerUnit = Math.max(1, Math.round(Number(row.paid) / Math.max(1, Number(row.qty))));
+    refund += Math.max(1, Math.round(paidPerUnit * rate)) * take;
     run('UPDATE orders SET resold = resold + ? WHERE id = ?', [take, row.id]);
     left -= take;
   }
+  refund = Math.max(1, refund);
+  const unit = Math.max(1, Math.round(refund / q));
 
   run(
     'UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE id = ?',
@@ -282,22 +303,69 @@ app.post('/api/orders/resell', authMiddleware, (req, res) => {
   });
 });
 
-// 某店铺消费流水与档位（商品卡/资产卡进度条展示）
-app.get('/api/shops/:id/flow', (req, res) => {
-  const row = query('SELECT flow_total FROM shops WHERE id = ?', [req.params.id])[0];
-  const flow = Number(row?.flow_total) || 0;
-  const t = shopFlowTier(flow);
+// 使用功能商品（boost 专用）：从背包消耗 1 件 → 激活 buff。
+// 资产去向互斥：使用后库存即减，不能再转售；daily 即食买时已生效（无库存）；permit 无 buff 不可使用
+app.post('/api/inventory/use', authMiddleware, (req, res) => {
+  const { product_id } = req.body || {};
+  if (!product_id) return res.status(400).json({ error: 'product_id 必填' });
+
+  const prods = query('SELECT id, shop_id, name, price, kind, buff FROM products WHERE id = ?', [product_id]);
+  if (prods.length === 0) return res.status(404).json({ error: '商品不存在' });
+  const p = prods[0];
+  if (p.kind !== 'boost') {
+    return res.status(409).json({ error: '该商品不是可使用的功能商品（即食品买时已生效，材料无需使用）' });
+  }
+  if (!p.buff) return res.status(409).json({ error: '该商品没有增益效果' });
+
+  const agg = query(
+    'SELECT SUM(qty) AS s, SUM(resold) AS r FROM orders WHERE user_id = ? AND product_id = ?',
+    [req.user.id, product_id]
+  )[0] || {};
+  const avail = Math.max(0, Number(agg.s) - Number(agg.r));
+  if (avail < 1) return res.status(409).json({ error: '背包里没有这件商品' });
+
+  // FIFO 消耗 1 件（与转售同一套库存机制——消耗后自动从背包消失）
+  let need = 1;
+  const fifo = query(
+    'SELECT id, qty, resold FROM orders WHERE user_id = ? AND product_id = ? ORDER BY created_at',
+    [req.user.id, product_id]
+  );
+  for (const row of fifo) {
+    if (need <= 0) break;
+    const free = Number(row.qty) - Number(row.resold);
+    if (free <= 0) continue;
+    const take = Math.min(free, need);
+    run('UPDATE orders SET resold = resold + ? WHERE id = ?', [take, row.id]);
+    need -= take;
+  }
+
+  const applied = applyProductBuff(req.user.id, p.buff, 1);
+  const remaining = Number(query('SELECT balance FROM users WHERE id = ?', [req.user.id])[0]?.balance ?? 0);
   res.json({
-    shop_id: req.params.id, flow_total: flow,
-    tier_index: t.index, share: t.share, next_tier: t.next,
+    ok: true, product: { id: p.id, name: p.name }, used: 1,
+    buffType: applied.type, buffUntil: applied.until,
+    remaining: Math.max(0, Math.floor(remaining)),
   });
 });
 
-// 已达流水档位的店铺列表（前端在其门口刷「客源金币」）
+// 某店铺消费流水与档位（商品卡/资产卡进度条展示；餐饮店门槛减半）
+app.get('/api/shops/:id/flow', (req, res) => {
+  const row = query('SELECT flow_total FROM shops WHERE id = ?', [req.params.id])[0];
+  const flow = Number(row?.flow_total) || 0;
+  const t = shopFlowTierFor(req.params.id, flow);
+  res.json({
+    shop_id: req.params.id, flow_total: flow,
+    tier_index: t.index, share: t.share,
+    next_tier: t.next === null ? null : Math.round(t.next / (t.restaurant ? 2 : 1)),
+    restaurant: t.restaurant,
+  });
+});
+
+// 已达流水档位的店铺列表（前端在其门口刷「客源金币」；餐饮店门槛减半）
 app.get('/api/shops/flowtiers', (_req, res) => {
   const rows = query('SELECT id, flow_total FROM shops WHERE active = 1');
   const shops = rows
-    .map((r) => ({ shopId: r.id, tierIndex: shopFlowTier(r.flow_total).index }))
+    .map((r) => ({ shopId: r.id, tierIndex: shopFlowTierFor(r.id, r.flow_total).index }))
     .filter((r) => r.tierIndex >= 0);
   res.json(shops);
 });

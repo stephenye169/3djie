@@ -165,9 +165,11 @@ export const api = {
   },
   // 商品交易：我的订单记录 + 可用优惠券
   myOrders: () => http('GET', '/api/orders/my'),
-  // 进货转售：我的库存（已购未转售）
+  // 进货转售：我的库存（已购未消耗）
   inventory: () => http('GET', '/api/inventory'),
   resell: (product_id, qty = 1) => http('POST', '/api/orders/resell', { product_id, qty }),
+  // 使用功能商品（boost 专用）：消耗 1 件激活 buff
+  useInventory: (product_id) => http('POST', '/api/inventory/use', { product_id }),
   // 店铺消费流水与档位（进度条展示）
   shopFlow: (shopId) => http('GET', `/api/shops/${shopId}/flow`),
   // 达流水档位的店铺列表（客源金币刷新点）

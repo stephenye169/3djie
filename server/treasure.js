@@ -12,7 +12,7 @@ import { query, run, randomId } from './db.js';
 import { authMiddleware } from './auth.js';
 import { settle, activeBuffs } from './economy.js';
 import { broadcastBattle } from './chat.js';
-import { formatMoney, shopFlowTier, BUFF_TYPES } from '../shared/assets.js';
+import { formatMoney, shopFlowTierFor, BUFF_TYPES } from '../shared/assets.js';
 import {
   talentLevelOf, goldHandCritRate, goldHandCritReward, idleRentFactor,
 } from '../shared/prestige.js';
@@ -139,7 +139,7 @@ router.post('/collect', authMiddleware, (req, res) => {
     // 客源金币：店铺流水达档后门口刷新，拾取者拿全额，店铺收购人按档位分成
     const shop = query('SELECT flow_total FROM shops WHERE id = ?', [shopId])[0];
     if (!shop) return res.status(404).json({ error: '店铺不存在' });
-    const t = shopFlowTier(shop.flow_total);
+    const t = shopFlowTierFor(shopId, shop.flow_total);
     if (t.index < 0) return res.status(409).json({ error: '这家店还没攒够客流，暂无客源金币' });
     flowIndex = t.index;
     reward = randomInt(20_000, 80_000) * (t.index + 1);

@@ -617,73 +617,75 @@ function _seedShops() {
   }
 
   // 商品种子：三类商品体系（daily 日常临时增益 / boost 功能长效增益 / permit 收购资格材料）。
-  // buff 编码 'type:ms:mult'；老库已有商品按名称映射补 kind/buff，新商品（permit 等）追加插入
+  // buff 编码 'type:ms:mult'；老库已有商品按名称映射补 kind/buff/price（量级拉齐），新商品（permit 等）追加插入。
+  // 价格量级对齐主货币：daily ≈ 一次金币拾取（3~8 万），boost ≈ 5~10 次拾取（10~40 万），
+  // permit ≈ 早期玩家半小时收入（20~80 万），tier2 双证 110 万 ≈ 收购价 2000 万的 5.5%
   const productSeed = [
     // milktea 东牌坊奶茶铺（tier1 日常）
-    ['milktea', '黑糖珍珠鲜奶', 15, 1, 'daily', 'speed:60000:1.35'],
-    ['milktea', '桂花乌龙', 12, 2, 'daily', 'crit:120000:0.12'],
-    ['milktea', '芋泥啵啵', 16, 3, 'daily', 'magnet:120000:1.6'],
+    ['milktea', '黑糖珍珠鲜奶', 30000, 1, 'daily', 'speed:60000:1.35'],
+    ['milktea', '桂花乌龙', 24000, 2, 'daily', 'crit:120000:0.12'],
+    ['milktea', '芋泥啵啵', 32000, 3, 'daily', 'magnet:120000:1.6'],
     // wonton 巷口馄饨铺
-    ['wonton', '鲜肉小馄饨', 12, 1, 'daily', 'magnet:120000:1.6'],
-    ['wonton', '大排面', 22, 2, 'daily', 'speed:60000:1.35'],
+    ['wonton', '鲜肉小馄饨', 24000, 1, 'daily', 'magnet:120000:1.6'],
+    ['wonton', '大排面', 44000, 2, 'daily', 'speed:60000:1.35'],
     // cafe 街角咖啡
-    ['cafe', '美式咖啡', 18, 1, 'daily', 'speed:60000:1.35'],
-    ['cafe', '拿铁', 22, 2, 'daily', 'crit:120000:0.12'],
-    ['cafe', '提拉米苏', 32, 3, 'daily', 'magnet:120000:1.6'],
+    ['cafe', '美式咖啡', 36000, 1, 'daily', 'speed:60000:1.35'],
+    ['cafe', '拿铁', 44000, 2, 'daily', 'crit:120000:0.12'],
+    ['cafe', '提拉米苏', 64000, 3, 'daily', 'magnet:120000:1.6'],
     // teahouse 青果茶肆
-    ['teahouse', '雨前绿茶', 48, 1, 'boost', 'income:600000:1.25'],
-    ['teahouse', '茶点拼盘', 28, 2, 'daily', 'magnet:120000:1.6'],
+    ['teahouse', '雨前绿茶', 96000, 1, 'boost', 'income:600000:1.25'],
+    ['teahouse', '茶点拼盘', 56000, 2, 'daily', 'magnet:120000:1.6'],
     // bakery 麦香面包房
-    ['bakery', '可颂', 8, 1, 'daily', 'crit:120000:0.12'],
-    ['bakery', '麻薯一盒', 15, 2, 'daily', 'magnet:120000:1.6'],
+    ['bakery', '可颂', 16000, 1, 'daily', 'crit:120000:0.12'],
+    ['bakery', '麻薯一盒', 30000, 2, 'daily', 'magnet:120000:1.6'],
     // dessert 糖芋苗小铺
-    ['dessert', '桂花糖芋苗', 15, 1, 'daily', 'crit:120000:0.12'],
-    ['dessert', '藕粉圆子', 18, 2, 'daily', 'magnet:120000:1.6'],
+    ['dessert', '桂花糖芋苗', 30000, 1, 'daily', 'crit:120000:0.12'],
+    ['dessert', '藕粉圆子', 36000, 2, 'daily', 'magnet:120000:1.6'],
     // flower 花语花坊
-    ['flower', '向日葵一束', 35, 1, 'daily', 'speed:60000:1.35'],
-    ['flower', '花环礼盒', 68, 2, 'boost', 'coinUp:600000:1.30'],
+    ['flower', '向日葵一束', 70000, 1, 'daily', 'speed:60000:1.35'],
+    ['flower', '花环礼盒', 136000, 2, 'boost', 'coinUp:600000:1.30'],
     // bookstore 时光书店（tier2：信誉章产地）
-    ['bookstore', '街区信誉章', 680, 1, 'permit', ''],
-    ['bookstore', '经营之道', 88, 2, 'boost', 'income:600000:1.25'],
-    ['bookstore', '青果巷志', 48, 3, 'daily', 'magnet:120000:1.6'],
+    ['bookstore', '街区信誉章', 300000, 1, 'permit', ''],
+    ['bookstore', '经营之道', 176000, 2, 'boost', 'income:600000:1.25'],
+    ['bookstore', '青果巷志', 96000, 3, 'daily', 'magnet:120000:1.6'],
     // tech 极客数码（tier2 功能商品）
-    ['tech', '信号增强器', 99, 1, 'boost', 'magnet:600000:1.6'],
-    ['tech', '云算力卡', 159, 2, 'boost', 'coinUp:600000:1.30'],
-    ['tech', '耳机', 199, 3, 'daily', 'speed:60000:1.35'],
+    ['tech', '信号增强器', 198000, 1, 'boost', 'magnet:600000:1.6'],
+    ['tech', '云算力卡', 318000, 2, 'boost', 'coinUp:600000:1.30'],
+    ['tech', '耳机', 398000, 3, 'daily', 'speed:60000:1.35'],
     // chenghuang 城隍庙戏楼（tier2）
-    ['chenghuang', '茶水瓜子', 20, 1, 'daily', 'crit:120000:0.12'],
-    ['chenghuang', '戏楼后排票', 80, 2, 'boost', 'income:600000:1.25'],
-    ['chenghuang', '戏楼前排票', 180, 3, 'boost', 'coinUp:600000:1.30'],
+    ['chenghuang', '茶水瓜子', 40000, 1, 'daily', 'crit:120000:0.12'],
+    ['chenghuang', '戏楼后排票', 160000, 2, 'boost', 'income:600000:1.25'],
+    ['chenghuang', '戏楼前排票', 360000, 3, 'boost', 'coinUp:600000:1.30'],
     // memory 文化记忆馆（tier2：装修图纸产地）
-    ['memory', '装修图纸', 380, 1, 'permit', ''],
-    ['memory', '记忆馆门票', 20, 2, 'daily', 'magnet:120000:1.6'],
-    ['memory', '明信片一套', 25, 3, 'daily', 'crit:120000:0.12'],
+    ['memory', '装修图纸', 200000, 1, 'permit', ''],
+    ['memory', '记忆馆门票', 40000, 2, 'daily', 'magnet:120000:1.6'],
+    ['memory', '明信片一套', 50000, 3, 'daily', 'crit:120000:0.12'],
     // songjiantang 松健堂（tier3）
-    ['songjiantang', '松健堂香囊', 45, 1, 'daily', 'speed:60000:1.35'],
-    ['songjiantang', '手抄字帖', 68, 2, 'boost', 'income:600000:1.25'],
-    ['songjiantang', '旧书一册', 120, 3, 'boost', 'coinUp:600000:1.30'],
+    ['songjiantang', '松健堂香囊', 90000, 1, 'daily', 'speed:60000:1.35'],
+    ['songjiantang', '手抄字帖', 136000, 2, 'boost', 'income:600000:1.25'],
+    ['songjiantang', '旧书一册', 240000, 3, 'boost', 'coinUp:600000:1.30'],
     // zhaoyuanren 赵元任故居（tier3：稀有材料产地）
-    ['zhaoyuanren', '《教我如何不想她》曲谱', 40, 1, 'daily', 'crit:120000:0.12'],
-    ['zhaoyuanren', '黑胶唱片', 260, 2, 'permit', ''],
-    ['zhaoyuanren', '故居门票', 25, 3, 'daily', 'magnet:120000:1.6'],
+    ['zhaoyuanren', '《教我如何不想她》曲谱', 80000, 1, 'daily', 'crit:120000:0.12'],
+    ['zhaoyuanren', '黑胶唱片', 600000, 2, 'permit', ''],
+    ['zhaoyuanren', '故居门票', 50000, 3, 'daily', 'magnet:120000:1.6'],
     // yunhongyi 可园（tier3）
-    ['yunhongyi', '园中茶席', 88, 1, 'boost', 'income:600000:1.25'],
-    ['yunhongyi', '太湖石摆件', 320, 2, 'boost', 'coinUp:600000:1.30'],
-    ['yunhongyi', '可园门票', 30, 3, 'daily', 'magnet:120000:1.6'],
+    ['yunhongyi', '园中茶席', 176000, 1, 'boost', 'income:600000:1.25'],
+    ['yunhongyi', '太湖石摆件', 640000, 2, 'boost', 'coinUp:600000:1.30'],
+    ['yunhongyi', '可园门票', 60000, 3, 'daily', 'magnet:120000:1.6'],
     // baguitang 八桂堂（tier4）
-    ['baguitang', '八桂堂会席', 1200, 1, 'boost', 'income:600000:1.25'],
-    ['baguitang', '家宴定制', 8800, 2, 'boost', 'coinUp:600000:1.30'],
+    ['baguitang', '八桂堂会席', 2400000, 1, 'boost', 'income:600000:1.25'],
+    ['baguitang', '家宴定制', 1760000, 2, 'boost', 'coinUp:600000:1.30'],
     // banyuan 半园（tier4）
-    ['banyuan', '半园茶会', 168, 1, 'boost', 'income:600000:1.25'],
-    ['banyuan', '桂花酿', 98, 2, 'daily', 'speed:60000:1.35'],
+    ['banyuan', '半园茶会', 336000, 1, 'boost', 'income:600000:1.25'],
+    ['banyuan', '桂花酿', 196000, 2, 'daily', 'speed:60000:1.35'],
     // lihetang 礼和堂会所（tier4：税务合规书产地）
-    ['lihetang', '税务合规书', 1200, 1, 'permit', ''],
-    ['lihetang', '图书借阅卡', 200, 2, 'daily', 'magnet:120000:1.6'],
-    ['lihetang', '雪茄吧单次', 380, 3, 'daily', 'crit:120000:0.12'],
+    ['lihetang', '税务合规书', 500000, 1, 'permit', ''],
+    ['lihetang', '图书借阅卡', 400000, 2, 'daily', 'magnet:120000:1.6'],
+    ['lihetang', '雪茄吧单次', 760000, 3, 'daily', 'crit:120000:0.12'],
     // finance 金融中心（tier4：商业许可证产地）
-    ['finance', '商业许可证', 2000, 1, 'permit', ''],
-    ['finance', '财富管理咨询', 2000, 2, 'boost', 'income:600000:1.25'],
-    ['finance', '保险箱年租', 1200, 3, 'daily', 'magnet:120000:1.6'],
+    ['finance', '商业许可证', 800000, 1, 'permit', ''],
+    ['finance', '财富管理咨询', 4000000, 2, 'boost', 'income:600000:1.25'],
+    ['finance', '保险箱年租', 2400000, 3, 'daily', 'magnet:120000:1.6'],
   ];
   for (const [shopId, name, price, sortOrder, kind, buff] of productSeed) {
     const existing = query(
@@ -691,14 +693,29 @@ function _seedShops() {
       [shopId, name]
     )[0];
     if (existing) {
-      // 老库已有同名商品：补 kind/buff（幂等）
-      run('UPDATE products SET kind = ?, buff = ? WHERE id = ?', [kind, buff, existing.id]);
+      // 老库已有同名商品：补 kind/buff/price（价格量级幂等校准）
+      run('UPDATE products SET kind = ?, buff = ?, price = ? WHERE id = ?', [kind, buff, price, existing.id]);
       continue;
     }
     run(
       'INSERT INTO products (id, shop_id, name, price, sort_order, kind, buff) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [randomId(), shopId, name, price, sortOrder, kind, buff]
     );
+  }
+
+  // 更早期版本残留商品（名称不在上表）：按店铺量级校准价格，堵住「低价旧货 + 转售」套利口子
+  const legacyPriceFix = [
+    ['lihetang', '会所日票', 400000],
+    ['banyuan', '园林写真', 800000],
+    ['memory', '青果巷导览手册', 50000],
+    ['finance', '街铺贷月供', 2400000],
+  ];
+  for (const [shopId, name, price] of legacyPriceFix) {
+    const row = query(
+      'SELECT id FROM products WHERE shop_id = ? AND name = ? AND price < ?',
+      [shopId, name, price]
+    )[0];
+    if (row) run('UPDATE products SET price = ? WHERE id = ?', [price, row.id]);
   }
 }
 

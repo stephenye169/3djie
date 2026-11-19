@@ -2,7 +2,7 @@ import { getShopById } from '../data/shops.js';
 import { api } from '../api/client.js';
 import { gameStore } from '../state/game.js';
 import { showToast } from './toast.js';
-import { formatMoney } from '../../shared/assets.js';
+import { formatMoney, BUFF_TYPES } from '../../shared/assets.js';
 
 /**
  * 个人中心 / 钱包面板（全量服务端账本）
@@ -24,11 +24,14 @@ export class WalletPanel {
 
     document.getElementById('wallet-close').addEventListener('click', () => this.close());
 
-    // 点击遮罩关闭
+    // 点击遮罩关闭；背包按钮分发（使用 = boost 激活 / 转售 = 流通品换钱）
     this.el.addEventListener('click', (e) => {
-      if (e.target === this.el) this.close();
-      const btn = e.target.closest('[data-resell]');
-      if (btn && !this.busy) this._resell(btn.dataset.resell, btn);
+      if (e.target === this.el) { this.close(); return; }
+      if (this.busy) return;
+      const useBtn = e.target.closest('[data-use]');
+      if (useBtn) { this._use(useBtn.dataset.use, useBtn); return; }
+      const sellBtn = e.target.closest('[data-resell]');
+      if (sellBtn) this._resell(sellBtn.dataset.resell, sellBtn);
     });
 
     document.addEventListener('keydown', (e) => {
@@ -104,18 +107,48 @@ export class WalletPanel {
     try {
       const items = await api.inventory();
       if (items.length === 0) {
-        this.inventoryEl.innerHTML = '<div class="wallet-empty">背包是空的——在店里「买入」进货，再「转售」赚差价</div>';
+        this.inventoryEl.innerHTML = '<div class="wallet-empty">背包是空的——⚡ 功能商品买后进背包「使用」激活，📜 收购材料囤着收购高级店</div>';
         return;
       }
-      this.inventoryEl.innerHTML = items.map((i) => `
+      this.inventoryEl.innerHTML = items.map((i) => {
+        const isBoost = i.kind === 'boost';
+        const isPermit = i.kind === 'permit';
+        const tag = isBoost ? '⚡ 功能' : isPermit ? '📜 材料' : '🥤 即食';
+        const action = isBoost
+          ? `<button class="wallet-use-btn" data-use="${escapeHtml(i.product_id)}" title="消耗 1 件激活增益（使用后不可再转售）">使用</button>
+             <button class="wallet-resell-btn" data-resell="${escapeHtml(i.product_id)}" title="未使用的可以转售（回收价 = 实付价 85%~95% 随机）">转售</button>`
+          : isPermit
+            ? `<button class="wallet-resell-btn" data-resell="${escapeHtml(i.product_id)}" title="硬通货可转售（回收价 = 实付价 85%~95% 随机）；收购高级店时按清单消耗">转售</button>`
+            : '';
+        return `
         <div class="wallet-row">
-          <span class="wallet-row-name">${i.emoji || '📦'} ${escapeHtml(i.name)} <i>×${i.qty}</i></span>
+          <span class="wallet-row-name">${i.emoji || '📦'} ${escapeHtml(i.name)} <i>×${i.qty}</i> <em class="wallet-tag">${tag}</em></span>
           <span class="wallet-row-shop">${escapeHtml(i.shop_name)}</span>
-          <button class="wallet-resell-btn" data-resell="${escapeHtml(i.product_id)}" title="回收价 = 标价 85%~110% 随机">转售</button>
+          ${action}
         </div>
-      `).join('');
+      `;
+      }).join('');
     } catch {
       this.inventoryEl.innerHTML = '<div class="wallet-empty">背包加载失败，请稍后再试</div>';
+    }
+  }
+
+  /** 使用功能商品：消耗 1 件激活 buff（资产去向互斥——用了的不能再卖） */
+  async _use(productId, btn) {
+    this.busy = true;
+    btn.disabled = true;
+    try {
+      const res = await api.useInventory(productId);
+      const def = BUFF_TYPES[res.buffType] || null;
+      showToast(`${def?.icon || '⚡'} 「${res.product?.name || '商品'}」已使用，${def?.desc || '增益生效'}！`);
+      gameStore.patchBuffs(res.buffType, res.buffUntil);
+      this._renderInventory();
+      await gameStore.refresh?.();
+    } catch (err) {
+      showToast(err.message || '使用失败');
+      btn.disabled = false;
+    } finally {
+      this.busy = false;
     }
   }
 
